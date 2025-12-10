@@ -595,7 +595,10 @@ template {
 }
   EOT
   perms = "0640"
-  error_on_missing_key = true
+  # Если какой-то из KV/ключей отсутствует, не роняем vault-agent,
+  # а просто пропускаем этот блок. Обязательные значения (role_id/secret_id)
+  # дополнительно проверяются в bash перед перезапуском агента.
+  error_on_missing_key = false
 }
 
 template {

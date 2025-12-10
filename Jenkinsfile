@@ -164,17 +164,19 @@ pipeline {
                     ]) {
                         writeFile file: 'prep_clone.sh', text: '''#!/bin/bash
 set -e
-rm -rf deploy-monitoring
-GIT_SSH_COMMAND='ssh -i "$BITBUCKET_SSH_KEY" -o StrictHostKeyChecking=no' git clone ssh://git@stash.delta.sbrf.ru:7999/infranas/deploy-monitoring.git deploy-monitoring >/dev/null 2>&1
-test -s deploy-monitoring/monitoring_deployment.sh
 
-# Генерируем лаунчеры с проверкой sha256 для обёрток
-if [ -x deploy-monitoring/wrappers/generate_launchers.sh ]; then
-  (cd deploy-monitoring/wrappers && ./generate_launchers.sh)
+# Генерируем лаунчеры с проверкой sha256 для обёрток в текущем репозитории
+if [ -x wrappers/generate_launchers.sh ]; then
+  (cd wrappers && ./generate_launchers.sh)
 fi
 '''
                         writeFile file: 'scp_script.sh', text: '''#!/bin/bash
-scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no -r deploy-monitoring "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/ >/dev/null 2>&1
+set -e
+ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
+    "$SSH_USER"@''' + params.SERVER_ADDRESS + ''' \
+    "rm -rf /tmp/deploy-monitoring && mkdir -p /tmp/deploy-monitoring" >/dev/null 2>&1
+scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no deploy_monitoring_script.sh "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/deploy-monitoring/monitoring_deployment.sh >/dev/null 2>&1
+scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no -r wrappers "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/deploy-monitoring/ >/dev/null 2>&1
 scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no temp_data_cred.json "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/ >/dev/null 2>&1
 '''
                         writeFile file: 'verify_script.sh', text: '''#!/bin/bash
@@ -252,7 +254,7 @@ sudo -n env \
   GRAFANA_URL="$RPM_GRAFANA" \
   PROMETHEUS_URL="$RPM_PROMETHEUS" \
   HARVEST_URL="$RPM_HARVEST" \
-  bash "$REMOTE_SCRIPT_PATH"
+  /bin/bash "$REMOTE_SCRIPT_PATH"
 REMOTE_EOF
 '''
                         def finalScript = scriptTpl

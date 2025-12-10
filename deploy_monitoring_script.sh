@@ -514,7 +514,9 @@ setup_vault_config() {
         /usr/bin/chown --reference=/opt/vault/conf /opt/vault/conf/role_id.txt /opt/vault/conf/secret_id.txt 2>/dev/null || true
     fi
 
-    "$WRAPPERS_DIR/config_writer_launcher.sh" "$VAULT_AGENT_HCL" << EOF
+    {
+        # Базовая конфигурация агента
+        cat << EOF
 pid_file = "/opt/vault/log/vault-agent.pidfile"
 vault {
  address = "https://$SEC_MAN_ADDR"
@@ -546,6 +548,11 @@ template {
   destination = "/tmp/data_sec.json"
   contents    = <<EOT
 {
+EOF
+
+        # Блок rpm_url
+        if [[ -n "$RPM_URL_KV" ]]; then
+            cat << EOF
   "rpm_url": {
     {{ with secret "$RPM_URL_KV" }}
     "harvest": {{ .Data.harvest | toJSON }},
@@ -553,12 +560,32 @@ template {
     "grafana": {{ .Data.grafana | toJSON }}
     {{ end }}
   },
+EOF
+        else
+            cat << EOF
+  "rpm_url": {},
+EOF
+        fi
+
+        # Блок tuz
+        if [[ -n "$TUZ_KV" ]]; then
+            cat << EOF
   "tuz": {
     {{ with secret "$TUZ_KV" }}
     "pass": {{ .Data.pass | toJSON }},
     "user": {{ .Data.user | toJSON }}
     {{ end }}
   },
+EOF
+        else
+            cat << EOF
+  "tuz": {},
+EOF
+        fi
+
+        # Блок netapp_ssh
+        if [[ -n "$NETAPP_SSH_KV" ]]; then
+            cat << EOF
   "netapp_ssh": {
     {{ with secret "$NETAPP_SSH_KV" }}
     "addr": {{ .Data.addr | toJSON }},
@@ -566,6 +593,16 @@ template {
     "pass": {{ .Data.pass | toJSON }}
     {{ end }}
   },
+EOF
+        else
+            cat << EOF
+  "netapp_ssh": {},
+EOF
+        fi
+
+        # Блок mon_ssh
+        if [[ -n "$MON_SSH_KV" ]]; then
+            cat << EOF
   "mon_ssh": {
     {{ with secret "$MON_SSH_KV" }}
     "addr": {{ .Data.addr | toJSON }},
@@ -573,6 +610,16 @@ template {
     "pass": {{ .Data.pass | toJSON }}
     {{ end }}
   },
+EOF
+        else
+            cat << EOF
+  "mon_ssh": {},
+EOF
+        fi
+
+        # Блок netapp_api
+        if [[ -n "$NETAPP_API_KV" ]]; then
+            cat << EOF
   "netapp_api": {
     {{ with secret "$NETAPP_API_KV" }}
     "addr": {{ .Data.addr | toJSON }},
@@ -580,12 +627,32 @@ template {
     "pass": {{ .Data.pass | toJSON }}
     {{ end }}
   },
+EOF
+        else
+            cat << EOF
+  "netapp_api": {},
+EOF
+        fi
+
+        # Блок grafana_web
+        if [[ -n "$GRAFANA_WEB_KV" ]]; then
+            cat << EOF
   "grafana_web": {
     {{ with secret "$GRAFANA_WEB_KV" }}
     "user": {{ .Data.user | toJSON }},
     "pass": {{ .Data.pass | toJSON }}
     {{ end }}
   },
+EOF
+        else
+            cat << EOF
+  "grafana_web": {},
+EOF
+        fi
+
+        # Блок vault-agent (role_id/secret_id обязательны для работы агента)
+        if [[ -n "$VAULT_AGENT_KV" ]]; then
+            cat << EOF
   "vault-agent": {
     {{ with secret "$VAULT_AGENT_KV" }}
     "role_id": {{ .Data.role_id | toJSON }},
@@ -595,11 +662,28 @@ template {
 }
   EOT
   perms = "0640"
-  # Если какой-то из KV/ключей отсутствует, не роняем vault-agent,
-  # а просто пропускаем этот блок. Обязательные значения (role_id/secret_id)
+  # Если какой-то из необязательных KV/ключей отсутствует, не роняем vault-agent,
+  # а просто создаём пустой объект. Обязательные значения (role_id/secret_id)
   # дополнительно проверяются в bash перед перезапуском агента.
   error_on_missing_key = false
 }
+EOF
+        else
+            # Если VAULT_AGENT_KV не задан, не вставляем блок secret вообще,
+            # чтобы не получить secret "" и падение агента.
+            cat << EOF
+  "vault-agent": {}
+}
+  EOT
+  perms = "0640"
+  error_on_missing_key = false
+}
+EOF
+        fi
+
+        # Блоки для сертификатов SBERCA (опционально, зависят от SBERCA_CERT_KV)
+        if [[ -n "$SBERCA_CERT_KV" ]]; then
+            cat << EOF
 
 template {
   destination = "/opt/vault/certs/server_bundle.pem"
@@ -634,8 +718,15 @@ template {
   EOT
   perms = "0600"
 }
-
 EOF
+        else
+            cat << EOF
+
+# SBERCA_CERT_KV не задан, шаблоны сертификатов не будут использоваться vault-agent.
+EOF
+        fi
+
+    } | "$WRAPPERS_DIR/config_writer_launcher.sh" "$VAULT_AGENT_HCL"
 
     # Перезапуск vault-agent с проверкой
     print_step "Перезапуск vault-agent"

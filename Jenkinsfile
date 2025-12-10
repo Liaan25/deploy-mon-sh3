@@ -9,7 +9,6 @@ pipeline {
         string(name: 'NETAPP_API_ADDR',    defaultValue: params.NETAPP_API_ADDR ?: '',    description: 'FQDN/IP NetApp API (например, cl01-mgmt.example.org)')
         string(name: 'VAULT_AGENT_KV',     defaultValue: params.VAULT_AGENT_KV ?: '',     description: 'Путь KV в Vault для AppRole: secret "vault-agent" с ключами role_id, secret_id')
         string(name: 'RPM_URL_KV',         defaultValue: params.RPM_URL_KV ?: '',         description: 'Путь KV в Vault для RPM URL')
-        string(name: 'TUZ_KV',             defaultValue: params.TUZ_KV ?: '',             description: 'Путь KV в Vault для TUZ')
         string(name: 'NETAPP_SSH_KV',      defaultValue: params.NETAPP_SSH_KV ?: '',      description: 'Путь KV в Vault для NetApp SSH')
         string(name: 'GRAFANA_WEB_KV',     defaultValue: params.GRAFANA_WEB_KV ?: '',     description: 'Путь KV в Vault для Grafana Web')
         string(name: 'SBERCA_CERT_KV',     defaultValue: params.SBERCA_CERT_KV ?: '',     description: 'Путь KV в Vault для SberCA Cert')
@@ -71,14 +70,6 @@ pipeline {
                             [envVar: 'VA_GRAFANA_WEB_PASS', vaultKey: 'pass']
                         ]]
                     }
-                    // TUZ_KV делаем опциональным: если не задан, не добавляем в запросы Vault
-                    if (params.TUZ_KV?.trim()) {
-                        vaultSecrets << [path: params.TUZ_KV, secretValues: [
-                            [envVar: 'VA_TUZ_USER', vaultKey: 'user'],
-                            [envVar: 'VA_TUZ_PASS', vaultKey: 'pass']
-                        ]]
-                    }
-
                     if (vaultSecrets.isEmpty()) {
                         echo "[WARNING] Ни один из KV-путей не задан, пропускаем обращение к Vault"
                     } else {
@@ -100,10 +91,6 @@ pipeline {
                             harvest: (env.VA_RPM_HARVEST ?: ''),
                             prometheus: (env.VA_RPM_PROMETHEUS ?: ''),
                             grafana: (env.VA_RPM_GRAFANA ?: '')
-                          ],
-                          "tuz": [
-                            pass: (env.VA_TUZ_PASS ?: ''),
-                            user: (env.VA_TUZ_USER ?: '')
                           ],
                           "netapp_ssh": [
                             addr: (env.VA_NETAPP_SSH_ADDR ?: ''),
@@ -215,7 +202,6 @@ sudo -n env \
   PROMETHEUS_PORT="__PROMETHEUS_PORT__" \
   VAULT_AGENT_KV="__VAULT_AGENT_KV__" \
   RPM_URL_KV="__RPM_URL_KV__" \
-  TUZ_KV="__TUZ_KV__" \
   NETAPP_SSH_KV="__NETAPP_SSH_KV__" \
   GRAFANA_WEB_KV="__GRAFANA_WEB_KV__" \
   SBERCA_CERT_KV="__SBERCA_CERT_KV__" \
@@ -237,7 +223,6 @@ REMOTE_EOF
                             .replace('__PROMETHEUS_PORT__',    params.PROMETHEUS_PORT    ?: '9090')
                             .replace('__VAULT_AGENT_KV__',     params.VAULT_AGENT_KV     ?: '')
                             .replace('__RPM_URL_KV__',         params.RPM_URL_KV         ?: '')
-                            .replace('__TUZ_KV__',             params.TUZ_KV             ?: '')
                             .replace('__NETAPP_SSH_KV__',      params.NETAPP_SSH_KV      ?: '')
                             .replace('__GRAFANA_WEB_KV__',     params.GRAFANA_WEB_KV     ?: '')
                             .replace('__SBERCA_CERT_KV__',     params.SBERCA_CERT_KV     ?: '')

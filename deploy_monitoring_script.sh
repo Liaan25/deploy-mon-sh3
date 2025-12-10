@@ -18,7 +18,6 @@ set -euo pipefail
 : "${NAMESPACE_CI:=}"
 : "${VAULT_AGENT_KV:=}"
 : "${RPM_URL_KV:=}"
-: "${TUZ_KV:=}"
 : "${NETAPP_SSH_KV:=}"
 : "${GRAFANA_WEB_KV:=}"
 : "${SBERCA_CERT_KV:=}"
@@ -562,22 +561,6 @@ EOF
         else
             cat << EOF
   "rpm_url": {},
-EOF
-        fi
-
-        # Блок tuz
-        if [[ -n "$TUZ_KV" ]]; then
-            cat << EOF
-  "tuz": {
-    {{ with secret "$TUZ_KV" }}
-    "pass": {{ .Data.pass | toJSON }},
-    "user": {{ .Data.user | toJSON }}
-    {{ end }}
-  },
-EOF
-        else
-            cat << EOF
-  "tuz": {},
 EOF
         fi
 

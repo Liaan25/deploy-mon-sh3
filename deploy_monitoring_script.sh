@@ -545,7 +545,7 @@ log_destination "Tengry" {
 }
 
 template {
-  destination = "/tmp/data_sec.json"
+  destination = "/opt/vault/conf/data_sec.json"
   contents    = <<EOT
 {
 EOF
@@ -1285,9 +1285,9 @@ ensure_grafana_token() {
     fi
 
     # Читаем учётные данные Grafana из файла, сформированного vault-agent (без использования env)
-    local cred_json="/tmp/data_sec.json"
+    local cred_json="/opt/vault/conf/data_sec.json"
     if [[ ! -f "$cred_json" ]]; then
-        print_error "Файл с секретами Vault (/tmp/data_sec.json) не найден"
+        print_error "Файл с секретами Vault ($cred_json) не найден"
         return 1
     fi
 

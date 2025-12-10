@@ -176,8 +176,6 @@ ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
         }
 
         stage('Выполнение развертывания') {
-        stage('Выполнение развертывания') {
-        stage('Выполнение развертывания') {
             steps {
                 script {
                     echo "[STEP] Запуск развертывания на удаленном сервере..."

@@ -20,7 +20,7 @@ RLM_TOKEN="${3:-}"
 # Белый список допустимых базовых URL RLM.
 # При необходимости добавьте сюда другие значения, согласованные с ИБ.
 ALLOWED_RLM_BASES=(
-  "https://api.rlm.sbrf.ru"
+  "https://simple-api.rlm.apps.prom-terra000049-ebm.ocp.sigma.sbrf.ru"
 )
 
 log() {

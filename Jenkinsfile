@@ -176,14 +176,14 @@ set -e
 ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
     "$SSH_USER"@''' + params.SERVER_ADDRESS + ''' \
     "rm -rf /tmp/deploy-monitoring && mkdir -p /tmp/deploy-monitoring" >/dev/null 2>&1
-scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no deploy_monitoring_script.sh "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/deploy-monitoring/monitoring_deployment.sh >/dev/null 2>&1
+scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no deploy_monitoring_script.sh "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/deploy-monitoring/deploy_monitoring_script.sh >/dev/null 2>&1
 scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no -r wrappers "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/deploy-monitoring/ >/dev/null 2>&1
 scp -i "$SSH_KEY" -q -o StrictHostKeyChecking=no temp_data_cred.json "$SSH_USER"@''' + params.SERVER_ADDRESS + ''':/tmp/ >/dev/null 2>&1
 '''
                         writeFile file: 'verify_script.sh', text: '''#!/bin/bash
 ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
     "$SSH_USER"@''' + params.SERVER_ADDRESS + ''' \
-    "ls -l /tmp/deploy-monitoring/monitoring_deployment.sh || echo '[ERROR] Скрипт не найден на удаленном сервере'" \
+    "ls -l /tmp/deploy-monitoring/deploy_monitoring_script.sh || echo '[ERROR] Скрипт не найден на удаленном сервере'" \
     2>/dev/null
 '''
                         sh 'chmod +x prep_clone.sh scp_script.sh verify_script.sh'
@@ -211,7 +211,7 @@ ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
 ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "$SSH_USER"@__SERVER_ADDRESS__ RLM_TOKEN="$RLM_TOKEN" /bin/bash -s <<'REMOTE_EOF'
 set -e
 USERNAME=$(whoami)
-REMOTE_SCRIPT_PATH="/tmp/deploy-monitoring/monitoring_deployment.sh"
+REMOTE_SCRIPT_PATH="/tmp/deploy-monitoring/deploy_monitoring_script.sh"
 if [ ! -f "$REMOTE_SCRIPT_PATH" ]; then
     echo "[ERROR] Скрипт $REMOTE_SCRIPT_PATH не найден" && exit 1
 fi

@@ -63,7 +63,7 @@
 - **SEC_MAN_ADDR** – FQDN SecMan/Vault (`https://...`).
 - **NAMESPACE_CI** – namespace в Vault (`CI04523276_CI10742292` и т.п.).
 - **NETAPP_API_ADDR** – FQDN NetApp API.
-- **HARVEST_RPM_URL` / `PROMETHEUS_RPM_URL` / `GRAFANA_RPM_URL`** – RPM‑URL‑ы (используются через Vault).
+- **RPM_URL_KV** – путь KV в Vault, из которого берутся RPM‑URL‑ы для Harvest, Prometheus и Grafana.
 - **VAULT_AGENT_KV`, `RPM_URL_KV`, `TUZ_KV`, `NETAPP_SSH_KV`, `MON_SSH_KV`, `NETAPP_API_KV`, `GRAFANA_WEB_KV`, `SBERCA_CERT_KV`** – пути KV‑секретов в Vault (см. `SECURITY_IB_NOTES.md`).
 - **ADMIN_EMAIL** – email администратора, передаётся в SberCA при выпуске сертификата.
 - **GRAFANA_PORT / PROMETHEUS_PORT** – порты сервисов (по умолчанию 3000/9090).

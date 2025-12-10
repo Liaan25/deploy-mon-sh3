@@ -7,9 +7,6 @@ pipeline {
         string(name: 'SEC_MAN_ADDR',       defaultValue: params.SEC_MAN_ADDR ?: '',       description: 'Адрес Vault для SecMan')
         string(name: 'NAMESPACE_CI',       defaultValue: params.NAMESPACE_CI ?: '',       description: 'Namespace для CI в Vault')
         string(name: 'NETAPP_API_ADDR',    defaultValue: params.NETAPP_API_ADDR ?: '',    description: 'FQDN/IP NetApp API (например, cl01-mgmt.example.org)')
-        string(name: 'HARVEST_RPM_URL',    defaultValue: params.HARVEST_RPM_URL ?: '',    description: 'Полная ссылка на RPM Harvest')
-        string(name: 'PROMETHEUS_RPM_URL', defaultValue: params.PROMETHEUS_RPM_URL ?: '', description: 'Полная ссылка на RPM Prometheus')
-        string(name: 'GRAFANA_RPM_URL',    defaultValue: params.GRAFANA_RPM_URL ?: '',    description: 'Полная ссылка на RPM Grafana')
         string(name: 'VAULT_AGENT_KV',     defaultValue: params.VAULT_AGENT_KV ?: '',     description: 'Путь KV в Vault для AppRole: secret "vault-agent" с ключами role_id, secret_id')
         string(name: 'RPM_URL_KV',         defaultValue: params.RPM_URL_KV ?: '',         description: 'Путь KV в Vault для RPM URL')
         string(name: 'TUZ_KV',             defaultValue: params.TUZ_KV ?: '',             description: 'Путь KV в Vault для TUZ')
@@ -160,8 +157,7 @@ pipeline {
                 script {
                     echo "[STEP] Клонирование репозитория и копирование на сервер ${params.SERVER_ADDRESS}..."
                     withCredentials([
-                        sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER'),
-                        sshUserPrivateKey(credentialsId: 'bitbucket-ssh-dev-ift', keyFileVariable: 'BITBUCKET_SSH_KEY', usernameVariable: 'BITBUCKET_SSH_USER')
+                        sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')
                     ]) {
                         writeFile file: 'prep_clone.sh', text: '''#!/bin/bash
 set -e
@@ -187,7 +183,7 @@ ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
     2>/dev/null
 '''
                         sh 'chmod +x prep_clone.sh scp_script.sh verify_script.sh'
-                        withEnv(['SSH_KEY=' + env.SSH_KEY, 'SSH_USER=' + env.SSH_USER, 'BITBUCKET_SSH_KEY=' + env.BITBUCKET_SSH_KEY]) {
+                        withEnv(['SSH_KEY=' + env.SSH_KEY, 'SSH_USER=' + env.SSH_USER]) {
                             sh './prep_clone.sh'
                             sh './scp_script.sh'
                             sh './verify_script.sh'

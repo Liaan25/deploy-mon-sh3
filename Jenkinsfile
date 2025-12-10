@@ -165,9 +165,9 @@ pipeline {
                         writeFile file: 'prep_clone.sh', text: '''#!/bin/bash
 set -e
 
-# Генерируем лаунчеры с проверкой sha256 для обёрток в текущем репозитории
-if [ -x wrappers/generate_launchers.sh ]; then
-  (cd wrappers && ./generate_launchers.sh)
+# Автоматически генерируем лаунчеры с проверкой sha256 для обёрток
+if [ -f wrappers/generate_launchers.sh ]; then
+  /bin/bash wrappers/generate_launchers.sh
 fi
 '''
                         writeFile file: 'scp_script.sh', text: '''#!/bin/bash

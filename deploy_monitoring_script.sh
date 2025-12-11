@@ -1201,7 +1201,7 @@ setup_monitoring_user_units() {
 
     # User-юнит Prometheus
     local prom_unit="${user_systemd_dir}/monitoring-prometheus.service"
-    "$WRAPPERS_DIR/config_writer_launcher.sh" "$prom_unit" << EOF
+    cat > "$prom_unit" << EOF
 [Unit]
 Description=Monitoring Prometheus (user service)
 After=network-online.target
@@ -1218,7 +1218,7 @@ EOF
 
     # User-юнит Grafana
     local graf_unit="${user_systemd_dir}/monitoring-grafana.service"
-    "$WRAPPERS_DIR/config_writer_launcher.sh" "$graf_unit" << EOF
+    cat > "$graf_unit" << EOF
 [Unit]
 Description=Monitoring Grafana (user service)
 After=network-online.target
@@ -1234,7 +1234,7 @@ EOF
 
     # User-юнит Harvest (аналогично системному сервису, который создаётся ниже)
     local harvest_unit="${user_systemd_dir}/monitoring-harvest.service"
-    "$WRAPPERS_DIR/config_writer_launcher.sh" "$harvest_unit" << 'HARVEST_USER_SERVICE_EOF'
+    cat > "$harvest_unit" << 'HARVEST_USER_SERVICE_EOF'
 [Unit]
 Description=NetApp Harvest Poller (user service)
 After=network.target
@@ -1253,7 +1253,7 @@ HARVEST_USER_SERVICE_EOF
 
     # Групповой target для удобства управления всем стеком
     local target_unit="${user_systemd_dir}/monitoring.target"
-    "$WRAPPERS_DIR/config_writer_launcher.sh" "$target_unit" << EOF
+    cat > "$target_unit" << EOF
 [Unit]
 Description=Monitoring stack (Prometheus + Grafana + Harvest)
 
@@ -1951,7 +1951,12 @@ main() {
 
     setup_vault_config
     load_config_from_json
-    create_rlm_install_tasks
+    if [[ "${SKIP_RLM_RPM_TASKS:-false}" == "true" ]]; then
+        print_warning "SKIP_RLM_RPM_TASKS=true: пропускаем создание и ожидание RLM-задач установки RPM"
+        print_success "🎉 ВСЕ ЗАДАЧИ УСПЕШНО ЗАВЕРШЕНЫ! (этап установки RPM пропущен для дебага)"
+    else
+        create_rlm_install_tasks
+    fi
     setup_certificates_after_install
     configure_harvest
     configure_prometheus

@@ -1938,7 +1938,11 @@ main() {
     check_and_close_ports
     detect_network_info
   ensure_monitoring_users_in_as_admin
-    cleanup_all_previous
+  if [[ "${SKIP_RLM_RPM_TASKS:-false}" == "true" ]]; then
+      print_warning "SKIP_RLM_RPM_TASKS=true: пропускаем полную очистку предыдущих установок (cleanup_all_previous)"
+  else
+      cleanup_all_previous
+  fi
     create_directories
 
     # При необходимости можно пропустить установку Vault через RLM,

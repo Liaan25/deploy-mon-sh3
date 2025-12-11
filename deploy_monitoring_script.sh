@@ -1066,9 +1066,9 @@ create_rlm_install_tasks() {
         print_success "✅ Задача создана для $name. ID: $task_id"
         print_info "📦 Устанавливаемый RPM: $url"
 
-        # Мониторинг статуса задачи (последовательно)
+        # Мониторинг статуса задачи RLM (не менее 120 попыток)
         print_step "Мониторинг статуса задачи RLM: $name (ID: $task_id)"
-        local max_attempts=30
+        local max_attempts=120
         local attempt=1
         while [[ $attempt -le $max_attempts ]]; do
             print_info "Проверка статуса $name (попытка $attempt/$max_attempts)..."

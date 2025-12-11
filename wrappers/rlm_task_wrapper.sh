@@ -1,10 +1,12 @@
 #!/bin/bash
 # Скрипт-обёртка для работы с RLM API.
 # Поддерживает операции:
-#   - create_vault_task: создание задачи vault_agent_config
-#   - get_vault_status:  получение статуса задачи Vault
-#   - create_rpm_task:   создание задачи LINUX_RPM_INSTALLER
-#   - get_rpm_status:    получение статуса RPM-задачи
+#   - create_vault_task:  создание задачи vault_agent_config
+#   - get_vault_status:   получение статуса задачи Vault
+#   - create_rpm_task:    создание задачи LINUX_RPM_INSTALLER
+#   - get_rpm_status:     получение статуса RPM-задачи
+#   - create_group_task:  создание задачи UVS_LINUX_ADD_USERS_GROUP
+#   - get_group_status:   получение статуса задачи UVS_LINUX_ADD_USERS_GROUP
 # Параметры (общие):
 #   $1 - режим (см. выше)
 #   $2 - базовый URL RLM_API_URL (https://... без переменных в sudoers)
@@ -89,10 +91,10 @@ main() {
   validate_token "$RLM_TOKEN"
 
   case "$MODE" in
-    create_vault_task|create_rpm_task)
+    create_vault_task|create_rpm_task|create_group_task)
       create_task
       ;;
-    get_vault_status|get_rpm_status)
+    get_vault_status|get_rpm_status|get_group_status)
       local task_id="${4:-}"
       [[ -n "$task_id" ]] || fail "Не указан task_id для режима $MODE"
       get_status "$task_id"

@@ -1,0 +1,65 @@
+############################################################
+# sudoers_example — примеры правил для мониторингового стенда
+# Этот файл НЕ является рабочим sudoers, он предназначен
+# только как шаблон для заявки в IDM / админам ОС.
+############################################################
+
+############################################################
+# 1. Базовые Defaults
+############################################################
+
+Defaults    env_reset
+Defaults    secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+
+############################################################
+# 2. Деплой: один контролируемый sudo на скрипт развёртывания
+#
+# ЗАМЕНЯЕТСЯ АДМИНОМ:
+#   <KAE>-lnx-mon_ci  → CI-номер тенанта + -lnx-mon_ci
+#   Путь до скрипта   → как в реальной установке
+############################################################
+
+<KAE>-lnx-mon_ci ALL=(ALL:ALL) NOEXEC: NOPASSWD: /bin/bash /tmp/deploy-monitoring/deploy_monitoring_script.sh
+
+############################################################
+# 3. Эксплуатация: CI → mon_sys → user-юниты (без root)
+#
+# ЗАМЕНЯЕТСЯ АДМИНОМ:
+#   <KAE>-lnx-mon_ci  → CI84324523-lnx-mon_ci
+#   <KAE>-lnx-mon_sys → CI84324523-lnx-mon_sys
+#   <KAE> — это вторая часть NAMESPACE_CI (пример:
+#          NAMESPACE_CI=CI32483483_CI84324523 → KAE=CI84324523)
+############################################################
+
+<KAE>-lnx-mon_ci ALL=(<KAE>-lnx-mon_sys) NOPASSWD: \
+    /usr/bin/systemctl --user daemon-reload, \
+    /usr/bin/systemctl --user start monitoring-prometheus.service, \
+    /usr/bin/systemctl --user restart monitoring-prometheus.service, \
+    /usr/bin/systemctl --user start monitoring-grafana.service, \
+    /usr/bin/systemctl --user restart monitoring-grafana.service, \
+    /usr/bin/systemctl --user start monitoring-harvest.service, \
+    /usr/bin/systemctl --user restart monitoring-harvest.service, \
+    /usr/bin/systemctl --user start monitoring.target, \
+    /usr/bin/systemctl --user restart monitoring.target
+
+############################################################
+# 4. Конкретный пример для KAE=CI84324523
+#
+# Эти строки можно использовать как тело правила в заявке
+# в IDM для конкретного DEV/TEST стенда.
+############################################################
+
+CI84324523-lnx-mon_ci ALL=(ALL:ALL) NOEXEC: NOPASSWD: /bin/bash /tmp/deploy-monitoring/deploy_monitoring_script.sh
+
+CI84324523-lnx-mon_ci ALL=(CI84324523-lnx-mon_sys) NOPASSWD: \
+    /usr/bin/systemctl --user daemon-reload, \
+    /usr/bin/systemctl --user start monitoring-prometheus.service, \
+    /usr/bin/systemctl --user restart monitoring-prometheus.service, \
+    /usr/bin/systemctl --user start monitoring-grafana.service, \
+    /usr/bin/systemctl --user restart monitoring-grafana.service, \
+    /usr/bin/systemctl --user start monitoring-harvest.service, \
+    /usr/bin/systemctl --user restart monitoring-harvest.service, \
+    /usr/bin/systemctl --user start monitoring.target, \
+    /usr/bin/systemctl --user restart monitoring.target
+
+

@@ -143,16 +143,21 @@ install_vault_via_rlm() {
     fi
     print_success "✅ Задача Vault создана. ID: $vault_task_id"
 
-    # Мониторинг статуса задачи Vault
+    # Мониторинг статуса задачи Vault (одна строка с обновлением счётчика и времени)
     local max_attempts=120
     local attempt=1
     local current_v_status=""
+    local start_ts
+    local interval_sec=10
+    start_ts=$(date +%s)
+
     while [[ $attempt -le $max_attempts ]]; do
-        print_info "Проверка статуса Vault (попытка $attempt/$max_attempts)..."
         local vault_status_resp
         vault_status_resp=$("$WRAPPERS_DIR/rlm_launcher.sh" get_vault_status "$RLM_API_URL" "$RLM_TOKEN" "$vault_task_id") || true
 
         if echo "$vault_status_resp" | grep -q '"status":"success"'; then
+            # финальное сообщение на новой строке
+            echo
             print_success "🎉 Задача Vault успешно завершена"
             sleep 10
             break
@@ -160,28 +165,41 @@ install_vault_via_rlm() {
 
         # Текущий статус для информации (approved/performing/etc.)
         current_v_status=$(echo "$vault_status_resp" | jq -r '.status // empty' 2>/dev/null || echo "$vault_status_resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-        if [[ -n "$current_v_status" ]]; then
-            print_info "Текущий статус Vault: $current_v_status"
-        else
-            print_info "Статус Vault: в процессе..."
-        fi
+        [[ -z "$current_v_status" ]] && current_v_status="in_progress"
+
+        # Обновляем одну строку в консоли с попыткой и временем
+        local now_ts elapsed total remain elapsed_min remain_min
+        now_ts=$(date +%s)
+        elapsed=$(( now_ts - start_ts ))
+        total=$(( max_attempts * interval_sec ))
+        remain=$(( total - elapsed ))
+        (( remain < 0 )) && remain=0
+        elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
+        remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
+
+        printf "\r[INFO] Проверка статуса Vault (попытка %d/%d, статус=%s, %sm/%sm)" \
+          "$attempt" "$max_attempts" "$current_v_status" "$elapsed_min" "$remain_min"
+        log_message "Проверка статуса Vault: попытка $attempt/$max_attempts, статус=$current_v_status, elapsed=${elapsed_min}m, left=${remain_min}m"
 
         if echo "$vault_status_resp" | grep -q '"status":"failed"'; then
+            echo
             print_error "💥 Задача Vault завершилась с ошибкой"
             print_error "Ответ RLM: $vault_status_resp"
             exit 1
         elif echo "$vault_status_resp" | grep -q '"status":"error"'; then
+            echo
             print_error "💥 Задача Vault завершилась с ошибкой"
             print_error "Ответ RLM: $vault_status_resp"
             exit 1
         fi
 
-        sleep 10
+        sleep "$interval_sec"
         attempt=$((attempt + 1))
     done
 
     if [[ $attempt -gt $max_attempts ]]; then
-        print_error "⏰ Задача Vault: таймаут ожидания (300 секунд). Последний статус: ${current_v_status:-unknown}"
+        echo
+        print_error "⏰ Задача Vault: таймаут ожидания (~$((max_attempts*interval_sec/60)) минут). Последний статус: ${current_v_status:-unknown}"
         exit 1
     fi
 }
@@ -289,40 +307,56 @@ ensure_user_in_as_admin() {
     local max_attempts=120
     local attempt=1
     local current_status=""
+    local start_ts
+    local interval_sec=10
+    start_ts=$(date +%s)
+
     while [[ $attempt -le $max_attempts ]]; do
-        print_info "Проверка статуса UVS_LINUX_ADD_USERS_GROUP для $user (попытка $attempt/$max_attempts)..."
         local status_resp
         status_resp=$("$WRAPPERS_DIR/rlm_launcher.sh" get_group_status "$RLM_API_URL" "$RLM_TOKEN" "$group_task_id") || true
 
         if echo "$status_resp" | grep -q '"status":"success"'; then
+            echo
             print_success "Задача UVS_LINUX_ADD_USERS_GROUP для $user успешно выполнена"
             break
         fi
 
         current_status=$(echo "$status_resp" | jq -r '.status // empty' 2>/dev/null || \
             echo "$status_resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+        [[ -z "$current_status" ]] && current_status="in_progress"
 
-        if [[ -n "$current_status" ]]; then
-            print_info "Текущий статус: $current_status"
-        fi
+        local now_ts elapsed total remain elapsed_min remain_min
+        now_ts=$(date +%s)
+        elapsed=$(( now_ts - start_ts ))
+        total=$(( max_attempts * interval_sec ))
+        remain=$(( total - elapsed ))
+        (( remain < 0 )) && remain=0
+        elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
+        remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
+
+        printf "\r[INFO] Статус UVS_LINUX_ADD_USERS_GROUP для %s (попытка %d/%d, статус=%s, %sm/%sm)" \
+          "$user" "$attempt" "$max_attempts" "$current_status" "$elapsed_min" "$remain_min"
+        log_message "Статус UVS_LINUX_ADD_USERS_GROUP для $user: попытка $attempt/$max_attempts, статус=$current_status, elapsed=${elapsed_min}m, left=${remain_min}m"
 
         if echo "$status_resp" | grep -q '"status":"failed"'; then
+            echo
             print_error "Задача UVS_LINUX_ADD_USERS_GROUP для $user завершилась с ошибкой"
             print_error "Ответ RLM: $status_resp"
             exit 1
         elif echo "$status_resp" | grep -q '"status":"error"'; then
+            echo
             print_error "Задача UVS_LINUX_ADD_USERS_GROUP для $user вернула статус error"
             print_error "Ответ RLM: $status_resp"
             exit 1
         fi
 
         attempt=$((attempt + 1))
-        sleep 10
+        sleep "$interval_sec"
     done
 
     if [[ $attempt -gt $max_attempts ]]; then
-        print_error "UVS_LINUX_ADD_USERS_GROUP для $user: таймаут ожидания (120 попыток)"
-        print_error "Последний статус: ${current_status:-unknown}"
+        echo
+        print_error "UVS_LINUX_ADD_USERS_GROUP для $user: таймаут ожидания (~$((max_attempts*interval_sec/60)) минут). Последний статус: ${current_status:-unknown}"
         exit 1
     fi
 }
@@ -420,40 +454,56 @@ ensure_mon_sys_in_grafana_group() {
     local max_attempts=120
     local attempt=1
     local current_status=""
+    local start_ts
+    local interval_sec=10
+    start_ts=$(date +%s)
+
     while [[ $attempt -le $max_attempts ]]; do
-        print_info "Проверка статуса UVS_LINUX_ADD_USERS_GROUP (grafana) для ${mon_sys_user} (попытка $attempt/$max_attempts)..."
         local status_resp
         status_resp=$("$WRAPPERS_DIR/rlm_launcher.sh" get_group_status "$RLM_API_URL" "$RLM_TOKEN" "$group_task_id") || true
 
         if echo "$status_resp" | grep -q '"status":"success"'; then
+            echo
             print_success "Задача UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana) успешно выполнена"
             break
         fi
 
         current_status=$(echo "$status_resp" | jq -r '.status // empty' 2>/dev/null || \
             echo "$status_resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+        [[ -z "$current_status" ]] && current_status="in_progress"
 
-        if [[ -n "$current_status" ]]; then
-            print_info "Текущий статус: $current_status"
-        fi
+        local now_ts elapsed total remain elapsed_min remain_min
+        now_ts=$(date +%s)
+        elapsed=$(( now_ts - start_ts ))
+        total=$(( max_attempts * interval_sec ))
+        remain=$(( total - elapsed ))
+        (( remain < 0 )) && remain=0
+        elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
+        remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
+
+        printf "\r[INFO] Статус UVS_LINUX_ADD_USERS_GROUP (grafana) для %s (попытка %d/%d, статус=%s, %sm/%sm)" \
+          "$mon_sys_user" "$attempt" "$max_attempts" "$current_status" "$elapsed_min" "$remain_min"
+        log_message "Статус UVS_LINUX_ADD_USERS_GROUP (grafana) для ${mon_sys_user}: попытка $attempt/$max_attempts, статус=$current_status, elapsed=${elapsed_min}m, left=${remain_min}m"
 
         if echo "$status_resp" | grep -q '"status":"failed"'; then
+            echo
             print_error "Задача UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana) завершилась с ошибкой"
             print_error "Ответ RLM: $status_resp"
             exit 1
         elif echo "$status_resp" | grep -q '"status":"error"'; then
+            echo
             print_error "Задача UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana) вернула статус error"
             print_error "Ответ RLM: $status_resp"
             exit 1
         fi
 
         attempt=$((attempt + 1))
-        sleep 10
+        sleep "$interval_sec"
     done
 
     if [[ $attempt -gt $max_attempts ]]; then
-        print_error "UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana): таймаут ожидания (120 попыток)"
-        print_error "Последний статус: ${current_status:-unknown}"
+        echo
+        print_error "UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana): таймаут ожидания (~$((max_attempts*interval_sec/60)) минут). Последний статус: ${current_status:-unknown}"
         exit 1
     fi
 }
@@ -1272,16 +1322,20 @@ create_rlm_install_tasks() {
         print_success "✅ Задача создана для $name. ID: $task_id"
         print_info "📦 Устанавливаемый RPM: $url"
 
-        # Мониторинг статуса задачи (последовательно)
+        # Мониторинг статуса задачи (последовательно, обновление одной строки)
         print_step "Мониторинг статуса задачи RLM: $name (ID: $task_id)"
         local max_attempts=30
         local attempt=1
+        local start_ts
+        local interval_sec=10
+        start_ts=$(date +%s)
+
         while [[ $attempt -le $max_attempts ]]; do
-            print_info "Проверка статуса $name (попытка $attempt/$max_attempts)..."
             local status_response
             status_response=$("$WRAPPERS_DIR/rlm_launcher.sh" get_rpm_status "$RLM_API_URL" "$RLM_TOKEN" "$task_id") || true
 
             if echo "$status_response" | grep -q '"status":"success"'; then
+                echo
                 print_success "🎉 ЗАДАЧА $name УСПЕШНО ЗАВЕРШЕНА!"
                 # Сохраняем ID задачи по имени
                 case "$name" in
@@ -1300,11 +1354,13 @@ create_rlm_install_tasks() {
                 esac
                 break
             elif echo "$status_response" | grep -q '"status":"failed"'; then
+                echo
                 print_error "💥 ЗАДАЧА $name ЗАВЕРШИЛАСЬ С ОШИБКОЙ"
                 print_error "❌ URL пакета: $url"
                 print_error "📋 Ответ RLM: $status_response"
                 exit 1
             elif echo "$status_response" | grep -q '"status":"error"'; then
+                echo
                 print_error "💥 ЗАДАЧА $name ЗАВЕРШИЛАСЬ С ОШИБКОЙ"
                 print_error "❌ URL пакета: $url"
                 print_error "📋 Ответ RLM: $status_response"
@@ -1312,21 +1368,31 @@ create_rlm_install_tasks() {
             else
                 local current_status
                 current_status=$(echo "$status_response" | jq -r '.status // empty' 2>/dev/null ||                     echo "$status_response" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 | tr -d '
-' | xargs)
-                if [[ -n "$current_status" ]]; then
-                    print_info "Текущий статус $name: $current_status"
-                else
-                    print_info "Статус $name: в процессе..."
-                fi
+ ' | xargs)
+                [[ -z "$current_status" ]] && current_status="in_progress"
+
+                local now_ts elapsed total remain elapsed_min remain_min
+                now_ts=$(date +%s)
+                elapsed=$(( now_ts - start_ts ))
+                total=$(( max_attempts * interval_sec ))
+                remain=$(( total - elapsed ))
+                (( remain < 0 )) && remain=0
+                elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
+                remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
+
+                printf "\r[INFO] Статус RLM-задачи %s (ID=%s, попытка %d/%d, статус=%s, %sm/%sm)" \
+                  "$name" "$task_id" "$attempt" "$max_attempts" "$current_status" "$elapsed_min" "$remain_min"
+                log_message "Статус RLM-задачи $name (ID=$task_id): попытка $attempt/$max_attempts, статус=$current_status, elapsed=${elapsed_min}m, left=${remain_min}m"
             fi
 
             attempt=$((attempt + 1))
-            sleep 10
+            sleep "$interval_sec"
         done
 
         if [[ $attempt -gt $max_attempts ]]; then
+            echo
             print_error "⏰ $name: ТАЙМАУТ (ID: $task_id)"
-            print_error "   Превышено время ожидания (300 секунд)"
+            print_error "   Превышено время ожидания (~$((max_attempts*interval_sec/60)) минут)"
             exit 1
         fi
 

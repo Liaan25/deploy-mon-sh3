@@ -89,10 +89,13 @@ main() {
   validate_token "$RLM_TOKEN"
 
   case "$MODE" in
-    create_vault_task|create_rpm_task)
+    create_vault_task|create_rpm_task|create_group_task)
+      # Все режимы создания задач используют один и тот же POST /api/tasks.json,
+      # различается только service/params в payload, которые формирует внешний скрипт.
       create_task
       ;;
-    get_vault_status|get_rpm_status)
+    get_vault_status|get_rpm_status|get_group_status)
+      # Все режимы получения статуса используют один и тот же GET /api/tasks/<id>/.
       local task_id="${4:-}"
       [[ -n "$task_id" ]] || fail "Не указан task_id для режима $MODE"
       get_status "$task_id"

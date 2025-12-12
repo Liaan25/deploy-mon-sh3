@@ -49,7 +49,43 @@ ALL=(ALL:ALL) NOEXEC: NOPASSWD: /bin/bash /tmp/deploy-monitoring/monitoring_depl
 
 
 ############################################################
-# 3. Справочный список Linux-команд из скрипта
+# 3. (Опционально) Модель CI → mon_sys для user-юнитов
+#
+# В соответствии с методичкой SberInfra рекомендуется, чтобы:
+#  - CI/ТУЗ (`<KAE>-lnx-mon_ci`) управлял user-юнитами;
+#  - сервисная nologin-УЗ (`<KAE>-lnx-mon_sys`) запускала сервисы;
+#  - linger и группы (`as-admin`, `systemd-journal`) настраивались
+#    через RLM/IDM и скрипты linuxadm-*.
+#
+# Ниже приведён ПРИМЕР (шаблон) sudoers для PROD, который должен
+# быть инстанцирован администратором ОС/IDM под конкретный KAE.
+#
+# ВАЖНО:
+#  - Переменные и <KAE> в sudoers недопустимы, поэтому OS/IDM
+#    должны подставить конкретное значение (например CI84324523).
+#  - Разрешаются только конкретные команды systemctl --user для
+#    нужных юнитов (без звёздочек и без ALL).
+############################################################
+
+# Шаблон (НЕ копировать дословно, требуется подстановка KAE)
+#
+# <KAE>-lnx-mon_ci ALL=(<KAE>-lnx-mon_sys) NOEXEC: NOPASSWD: \
+#   /usr/bin/systemctl --user daemon-reload, \
+#   /usr/bin/systemctl --user restart monitoring-prometheus.service, \
+#   /usr/bin/systemctl --user restart monitoring-grafana.service, \
+#   /usr/bin/systemctl --user restart monitoring-harvest.service
+
+# Пример для конкретного KAE = CI84324523:
+#
+# CI84324523-lnx-mon_ci ALL=(CI84324523-lnx-mon_sys) NOEXEC: NOPASSWD: \
+#   /usr/bin/systemctl --user daemon-reload, \
+#   /usr/bin/systemctl --user restart monitoring-prometheus.service, \
+#   /usr/bin/systemctl --user restart monitoring-grafana.service, \
+#   /usr/bin/systemctl --user restart monitoring-harvest.service
+
+
+############################################################
+# 4. Справочный список Linux-команд из скрипта
 #    deploy_monitoring_script.sh
 #
 # ВНИМАНИЕ:

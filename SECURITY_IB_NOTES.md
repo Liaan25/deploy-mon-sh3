@@ -104,4 +104,53 @@
     - взять версии обёрток из репозитория,
     - пересчитать хеши и убедиться, что они совпадают с ожидаемыми `EXPECTED_HASH` в лаунчерах, установленных на боевом сервере.
 
+#### 5. Ролевая модель KAE и группа `as-admin`
+
+- Весь проект опирается на **динамический идентификатор KAE**, вычисляемый из `NAMESPACE_CI` вида `CIxxxx_CIyyyy`:
+  - `KAE=$(echo "$NAMESPACE_CI" | cut -d'_' -f2)` → напр. `CI84324523`.
+- На основе `KAE` формируются имена учётных записей мониторинга (создаются через RLM/IDM, **не** этим скриптом):
+  - `${KAE}-lnx-mon_sys` – сервисная nologin‑УЗ, под которой работают user‑юниты мониторинга;
+  - `${KAE}-lnx-mon_ci` – интерактивная CI/ТУЗ, под которой выполняется Jenkins и ручные операции сопровождения.
+- В начале работы `deploy_monitoring_script.sh` выполняет функцию `ensure_monitoring_users_in_as_admin`, которая:
+  - для `${KAE}-lnx-mon_sys` и `${KAE}-lnx-mon_ci` по очереди вызывает `ensure_user_in_as_admin`;
+  - проверяет, что пользователь уже состоит в группе `as-admin` (через `id ... | grep '\bas-admin\b'`);
+  - если нет — создаёт RLM‑задачу `UVS_LINUX_ADD_USERS_GROUP` (service `UVS_LINUX_ADD_USERS_GROUP`) через обёртку RLM;
+  - ожидает статус `success` (до 120 попыток с интервалом 10 секунд), иначе завершает скрипт ошибкой.
+- Таким образом, **членство обеих УЗ в `as-admin` автоматически обеспечивается через RLM‑сценарий**, без прямого изменения `/etc/group` из скрипта.
+
+Это напрямую следует из методички SberInfra:
+
+- все действия по расширению прав должны выполняться через RLM/IDM;
+- группа `as-admin` нужна как для использования скриптов `linuxadm-*`, так и для включения linger через `linuxadm-enable-linger`.
+
+#### 6. User‑юниты systemd под `${KAE}-lnx-mon_sys`
+
+При наличии `KAE` и пользователя `${KAE}-lnx-mon_sys` скрипт переводит мониторинг на **user‑юниты** в пространстве пользователя, вместо системных юнитов в `/etc/systemd/system`:
+
+- Создаются юниты в `~${KAE}-lnx-mon_sys/.config/systemd/user/`:
+  - `monitoring-prometheus.service` – запускает `/usr/bin/prometheus` с уже настроенным `prometheus.yml` и `web-config.yml`;
+  - `monitoring-grafana.service` – запускает `grafana-server` с текущим `grafana.ini`;
+  - `monitoring-harvest.service` – запускает/останавливает Harvest из `/opt/harvest`;
+  - `monitoring.target` – единая точка управления стеком (Prometheus + Grafana + Harvest).
+- Права на каталоги и файлы Prometheus (конфиги, сертификаты, data‑директория) **переотдаются на `${KAE}-lnx-mon_sys`** в функции
+  `adjust_prometheus_permissions_for_mon_sys`, чтобы Prometheus мог работать в режиме user‑юнита без поднятия прав.
+- Управление сервисами в целевой модели:
+
+```bash
+sudo -u ${KAE}-lnx-mon_sys \
+  XDG_RUNTIME_DIR="/run/user/$(id -u ${KAE}-lnx-mon_sys)" \
+  systemctl --user daemon-reload
+
+sudo -u ${KAE}-lnx-mon_sys \
+  XDG_RUNTIME_DIR="/run/user/$(id -u ${KAE}-lnx-mon_sys)" \
+  systemctl --user restart monitoring-prometheus.service monitoring-grafana.service
+```
+
+Для корректной работы user‑юнитов соблюдаются требования SberInfra:
+
+- у `${KAE}-lnx-mon_sys` есть домашний каталог и включён linger (`linuxadm-enable-linger ${KAE}-lnx-mon_sys` после добавления в `as-admin`);
+- при необходимости `${KAE}-lnx-mon_sys` добавлен в группу `systemd-journal` для чтения логов через `journalctl --user`.
+
+Fallback‑модель (если KAE/`…-mon_sys` нет) – запуск через системные юниты (`prometheus`, `grafana-server`, `harvest`) сохраняется для DEV и переходных стендов.
+
 

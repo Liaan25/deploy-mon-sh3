@@ -347,6 +347,117 @@ ensure_monitoring_users_in_as_admin() {
     ensure_user_in_as_admin "$mon_ci_user"
 }
 
+# Добавляет ${KAE}-lnx-mon_sys в группу grafana через RLM (для доступа к /etc/grafana/grafana.ini)
+ensure_mon_sys_in_grafana_group() {
+    print_step "Проверка членства ${KAE}-lnx-mon_sys в группе grafana"
+    ensure_working_directory
+
+    if [[ -z "${KAE:-}" ]]; then
+        print_warning "KAE не определён (NAMESPACE_CI пуст), пропускаем добавление mon_sys в grafana"
+        return 0
+    fi
+
+    local mon_sys_user="${KAE}-lnx-mon_sys"
+
+    if ! id "$mon_sys_user" >/dev/null 2>&1; then
+        print_warning "Пользователь ${mon_sys_user} не найден в системе, пропускаем добавление в grafana"
+        return 0
+    fi
+
+    # Уже в группе grafana → ничего не делаем
+    if id "$mon_sys_user" | grep -q '\bgrafana\b'; then
+        print_success "Пользователь ${mon_sys_user} уже состоит в группе grafana"
+        return 0
+    fi
+
+    if [[ -z "${RLM_API_URL:-}" || -z "${RLM_TOKEN:-}" || -z "${SERVER_IP:-}" ]]; then
+        print_error "Недостаточно параметров для вызова RLM (RLM_API_URL/RLM_TOKEN/SERVER_IP)"
+        exit 1
+    fi
+
+    if [[ ! -x "$WRAPPERS_DIR/rlm_launcher.sh" ]]; then
+        print_error "Лаунчер rlm_launcher.sh не найден или не исполняемый в $WRAPPERS_DIR"
+        exit 1
+    fi
+
+    print_info "Создание задачи RLM UVS_LINUX_ADD_USERS_GROUP для добавления ${mon_sys_user} в grafana"
+
+    local payload create_resp group_task_id
+    payload=$(jq -n \
+        --arg usr "$mon_sys_user" \
+        --arg ip "$SERVER_IP" \
+        '{
+          params: {
+            VAR_GRPS: [
+              {
+                group: "grafana",
+                gid: "",
+                users: [ $usr ]
+              }
+            ]
+          },
+          start_at: "now",
+          service: "UVS_LINUX_ADD_USERS_GROUP",
+          skip_check_collisions: true,
+          items: [
+            {
+              table_id: "uvslinuxtemplatewithtestandprom",
+              invsvm_ip: $ip
+            }
+          ]
+        }')
+
+    create_resp=$(printf '%s' "$payload" | \
+        "$WRAPPERS_DIR/rlm_launcher.sh" create_group_task "$RLM_API_URL" "$RLM_TOKEN") || true
+
+    group_task_id=$(echo "$create_resp" | jq -r '.id // empty')
+    if [[ -z "$group_task_id" || "$group_task_id" == "null" ]]; then
+        print_error "Не удалось создать задачу UVS_LINUX_ADD_USERS_GROUP для grafana: $create_resp"
+        exit 1
+    fi
+    print_success "Задача UVS_LINUX_ADD_USERS_GROUP (grafana) создана. ID: $group_task_id"
+
+    local max_attempts=120
+    local attempt=1
+    local current_status=""
+    while [[ $attempt -le $max_attempts ]]; do
+        print_info "Проверка статуса UVS_LINUX_ADD_USERS_GROUP (grafana) для ${mon_sys_user} (попытка $attempt/$max_attempts)..."
+        local status_resp
+        status_resp=$("$WRAPPERS_DIR/rlm_launcher.sh" get_group_status "$RLM_API_URL" "$RLM_TOKEN" "$group_task_id") || true
+
+        if echo "$status_resp" | grep -q '"status":"success"'; then
+            print_success "Задача UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana) успешно выполнена"
+            break
+        fi
+
+        current_status=$(echo "$status_resp" | jq -r '.status // empty' 2>/dev/null || \
+            echo "$status_resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+        if [[ -n "$current_status" ]]; then
+            print_info "Текущий статус: $current_status"
+        fi
+
+        if echo "$status_resp" | grep -q '"status":"failed"'; then
+            print_error "Задача UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana) завершилась с ошибкой"
+            print_error "Ответ RLM: $status_resp"
+            exit 1
+        elif echo "$status_resp" | grep -q '"status":"error"'; then
+            print_error "Задача UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana) вернула статус error"
+            print_error "Ответ RLM: $status_resp"
+            exit 1
+        fi
+
+        attempt=$((attempt + 1))
+        sleep 10
+    done
+
+    if [[ $attempt -gt $max_attempts ]]; then
+        print_error "UVS_LINUX_ADD_USERS_GROUP для ${mon_sys_user} (grafana): таймаут ожидания (120 попыток)"
+        print_error "Последний статус: ${current_status:-unknown}"
+        exit 1
+    fi
+}
+
 # Функция для проверки и установки рабочей директории
 ensure_working_directory() {
     local target_dir="/tmp"
@@ -2001,6 +2112,7 @@ main() {
     check_and_close_ports
     detect_network_info
     ensure_monitoring_users_in_as_admin
+    ensure_mon_sys_in_grafana_group
     cleanup_all_previous
     create_directories
 

@@ -58,12 +58,6 @@ VAULT_CRT_FILE=""
 VAULT_KEY_FILE=""
 GRAFANA_BEARER_TOKEN=""
 
-# Значение KAE (вторая часть NAMESPACE_CI вида CIxxxx_CIyyyy), используется для имён УЗ
-KAE=""
-if [[ -n "${NAMESPACE_CI:-}" ]]; then
-    KAE=$(echo "$NAMESPACE_CI" | cut -d'_' -f2)
-fi
-
 # Порты сервисов
 PROMETHEUS_PORT="${PROMETHEUS_PORT:-9090}"
 GRAFANA_PORT="${GRAFANA_PORT:-3000}"
@@ -217,114 +211,6 @@ log_message() {
     log_dir=$(dirname "$LOG_FILE")
     mkdir -p "$log_dir" 2>/dev/null || true
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE" 2>/dev/null || true
-}
-
-# Универсальная функция добавления пользователя в группу as-admin через RLM
-ensure_user_in_as_admin() {
-    local user="$1"
-
-    if [[ -z "$user" ]]; then
-        print_warning "ensure_user_in_as_admin: пустое имя пользователя, пропускаем"
-        return 0
-    fi
-
-    if ! id "$user" >/dev/null 2>&1; then
-        print_warning "Пользователь $user не найден в системе, пропускаем добавление в as-admin"
-        return 0
-    fi
-
-    # Уже в группе as-admin → ничего не делаем
-    if id "$user" | grep -q '\bas-admin\b'; then
-        print_success "Пользователь $user уже состоит в группе as-admin"
-        return 0
-    fi
-
-    if [[ -z "${RLM_API_URL:-}" || -z "${RLM_TOKEN:-}" || -z "${SERVER_IP:-}" ]]; then
-        print_error "Недостаточно параметров для вызова RLM (RLM_API_URL/RLM_TOKEN/SERVER_IP)"
-        exit 1
-    fi
-
-    if [[ ! -x "$WRAPPERS_DIR/rlm_launcher.sh" ]]; then
-        print_error "Лаунчер rlm_launcher.sh не найден или не исполняемый в $WRAPPERS_DIR"
-        exit 1
-    fi
-
-    print_info "Создание задачи RLM UVS_LINUX_ADD_USERS_GROUP для добавления $user в as-admin"
-
-    local payload create_resp group_task_id
-    payload=$(jq -n \
-        --arg usr "$user" \
-        --arg ip "$SERVER_IP" \
-        '{
-          params: {
-            VAR_GRPS: [
-              {
-                group: "as-admin",
-                gid: "",
-                users: [ $usr ]
-              }
-            ]
-          },
-          start_at: "now",
-          service: "UVS_LINUX_ADD_USERS_GROUP",
-          skip_check_collisions: true,
-          items: [
-            {
-              table_id: "uvslinuxtemplatewithtestandprom",
-              invsvm_ip: $ip
-            }
-          ]
-        }')
-
-    create_resp=$(printf '%s' "$payload" | \
-        "$WRAPPERS_DIR/rlm_launcher.sh" create_group_task "$RLM_API_URL" "$RLM_TOKEN") || true
-
-    group_task_id=$(echo "$create_resp" | jq -r '.id // empty')
-    if [[ -z "$group_task_id" || "$group_task_id" == "null" ]]; then
-        print_error "Не удалось создать задачу UVS_LINUX_ADD_USERS_GROUP: $create_resp"
-        exit 1
-    fi
-    print_success "Задача UVS_LINUX_ADD_USERS_GROUP создана. ID: $group_task_id"
-
-    local max_attempts=120
-    local attempt=1
-    local current_status=""
-    while [[ $attempt -le $max_attempts ]]; do
-        print_info "Проверка статуса UVS_LINUX_ADD_USERS_GROUP для $user (попытка $attempt/$max_attempts)..."
-        local status_resp
-        status_resp=$("$WRAPPERS_DIR/rlm_launcher.sh" get_group_status "$RLM_API_URL" "$RLM_TOKEN" "$group_task_id") || true
-
-        if echo "$status_resp" | grep -q '"status":"success"'; then
-            print_success "Задача UVS_LINUX_ADD_USERS_GROUP для $user успешно выполнена"
-            break
-        fi
-
-        current_status=$(echo "$status_resp" | jq -r '.status // empty' 2>/dev/null || \
-            echo "$status_resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-
-        if [[ -n "$current_status" ]]; then
-            print_info "Текущий статус: $current_status"
-        fi
-
-        if echo "$status_resp" | grep -q '"status":"failed"'; then
-            print_error "Задача UVS_LINUX_ADD_USERS_GROUP для $user завершилась с ошибкой"
-            print_error "Ответ RLM: $status_resp"
-            exit 1
-        elif echo "$status_resp" | grep -q '"status":"error"'; then
-            print_error "Задача UVS_LINUX_ADD_USERS_GROUP для $user вернула статус error"
-            print_error "Ответ RLM: $status_resp"
-            exit 1
-        fi
-
-        attempt=$((attempt + 1))
-        sleep 10
-    done
-
-    if [[ $attempt -gt $max_attempts ]]; then
-        print_error "UVS_LINUX_ADD_USERS_GROUP для $user: таймаут ожидания (120 попыток)"
-        print_error "Последний статус: ${current_status:-unknown}"
-        exit 1
-    fi
 }
 
 # Функция для проверки и установки рабочей директории
@@ -810,26 +696,6 @@ EOF
     fi
 }
 
-# Последовательно добавляет ${KAE}-lnx-mon_sys и ${KAE}-lnx-mon_ci в группу as-admin через RLM
-ensure_monitoring_users_in_as_admin() {
-    print_step "Проверка членства monitoring-УЗ в группе as-admin"
-    ensure_working_directory
-
-    if [[ -z "${KAE:-}" ]]; then
-        print_warning "KAE не определён (NAMESPACE_CI пуст), пропускаем добавление monitoring-УЗ в as-admin"
-        return 0
-    fi
-
-    local mon_sys_user="${KAE}-lnx-mon_sys"
-    local mon_ci_user="${KAE}-lnx-mon_ci"
-
-    # Сначала добавляем mon_sys, ожидаем success
-    ensure_user_in_as_admin "$mon_sys_user"
-
-    # Затем добавляем mon_ci
-    ensure_user_in_as_admin "$mon_ci_user"
-}
-
 load_config_from_json() {
     print_step "Загрузка конфигурации из параметров Jenkins"
     ensure_working_directory
@@ -1066,9 +932,9 @@ create_rlm_install_tasks() {
         print_success "✅ Задача создана для $name. ID: $task_id"
         print_info "📦 Устанавливаемый RPM: $url"
 
-        # Мониторинг статуса задачи RLM (не менее 120 попыток)
+        # Мониторинг статуса задачи (последовательно)
         print_step "Мониторинг статуса задачи RLM: $name (ID: $task_id)"
-        local max_attempts=120
+        local max_attempts=30
         local attempt=1
         while [[ $attempt -le $max_attempts ]]; do
             print_info "Проверка статуса $name (попытка $attempt/$max_attempts)..."
@@ -1172,101 +1038,6 @@ setup_certificates_after_install() {
         print_error "Сертификаты от Vault не найдены: ожидается /opt/vault/certs/server_bundle.pem или пара $VAULT_CRT_FILE/$VAULT_KEY_FILE"
         exit 1
     fi
-}
-
-# Создание user-юнитов systemd под сервисной учётной записью ${KAE}-lnx-mon_sys
-setup_monitoring_user_units() {
-    print_step "Создание user-юнитов systemd для мониторинга (Prometheus/Grafana/Harvest)"
-    ensure_working_directory
-
-    if [[ -z "${KAE:-}" ]]; then
-        print_warning "KAE не определён (NAMESPACE_CI пуст), пропускаем создание user-юнитов"
-        return 0
-    fi
-
-    local mon_sys_user="${KAE}-lnx-mon_sys"
-    if ! id "$mon_sys_user" >/dev/null 2>&1; then
-        print_warning "Пользователь ${mon_sys_user} не найден в системе, пропускаем создание user-юнитов"
-        return 0
-    fi
-
-    local mon_sys_home
-    mon_sys_home=$(getent passwd "$mon_sys_user" | awk -F: '{print $6}')
-    if [[ -z "$mon_sys_home" ]]; then
-        mon_sys_home="/home/${mon_sys_user}"
-    fi
-
-    local user_systemd_dir="${mon_sys_home}/.config/systemd/user"
-    mkdir -p "$user_systemd_dir"
-
-    # User-юнит Prometheus
-    local prom_unit="${user_systemd_dir}/monitoring-prometheus.service"
-    cat > "$prom_unit" << EOF
-[Unit]
-Description=Monitoring Prometheus (user service)
-After=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=/etc/prometheus/prometheus.env
-ExecStart=/usr/bin/prometheus \$PROMETHEUS_OPTS
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-EOF
-
-    # User-юнит Grafana
-    local graf_unit="${user_systemd_dir}/monitoring-grafana.service"
-    cat > "$graf_unit" << EOF
-[Unit]
-Description=Monitoring Grafana (user service)
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/sbin/grafana-server --config=/etc/grafana/grafana.ini --homepath=/usr/share/grafana
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-EOF
-
-    # User-юнит Harvest (аналогично системному сервису, который создаётся ниже)
-    local harvest_unit="${user_systemd_dir}/monitoring-harvest.service"
-    cat > "$harvest_unit" << 'HARVEST_USER_SERVICE_EOF'
-[Unit]
-Description=NetApp Harvest Poller (user service)
-After=network.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/harvest
-ExecStart=/opt/harvest/bin/harvest start
-ExecStop=/opt/harvest/bin/harvest stop
-RemainAfterExit=yes
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:/opt/harvest/bin
-
-[Install]
-WantedBy=default.target
-HARVEST_USER_SERVICE_EOF
-
-    # Групповой target для удобства управления всем стеком
-    local target_unit="${user_systemd_dir}/monitoring.target"
-    cat > "$target_unit" << EOF
-[Unit]
-Description=Monitoring stack (Prometheus + Grafana + Harvest)
-
-[Install]
-WantedBy=default.target
-EOF
-
-    # Права и владельцы на юниты
-    chown -R "${mon_sys_user}:${mon_sys_user}" "${mon_sys_home}/.config"
-    chmod 700 "${mon_sys_home}/.config"
-    chmod 640 "$prom_unit" "$graf_unit" "$harvest_unit" "$target_unit"
-
-    print_success "User-юниты systemd для мониторинга созданы под пользователем ${mon_sys_user}"
 }
 
 configure_harvest() {
@@ -1572,95 +1343,36 @@ configure_services() {
         exit 1
     fi
 
-    # Определяем, можем ли использовать user-юниты под ${KAE}-lnx-mon_sys
-    local use_user_units=false
-    local mon_sys_user=""
-    local mon_sys_uid=""
-
-    if [[ -n "${KAE:-}" ]]; then
-        mon_sys_user="${KAE}-lnx-mon_sys"
-        if id "$mon_sys_user" >/dev/null 2>&1; then
-            mon_sys_uid=$(id -u "$mon_sys_user")
-            use_user_units=true
-            print_info "Обнаружен пользователь для user-юнитов: ${mon_sys_user} (UID=${mon_sys_uid})"
-        else
-            print_warning "Пользователь ${mon_sys_user} не найден, будем использовать системные юниты"
-        fi
+    print_info "Настройка сервиса: prometheus"
+    systemctl enable prometheus >/dev/null 2>&1 || print_error "Ошибка включения автозапуска prometheus"
+    systemctl restart prometheus >/dev/null 2>&1 || print_error "Ошибка запуска prometheus"
+    sleep 2
+    if systemctl is-active --quiet prometheus; then
+        print_success "prometheus успешно запущен и настроен на автозапуск"
     else
-        print_warning "KAE не определён, будем использовать системные юниты"
+        print_error "prometheus не удалось запустить"
+        systemctl status prometheus --no-pager | while IFS= read -r line; do
+            print_info "$line"
+            log_message "[PROMETHEUS SYSTEMD STATUS] $line"
+        done
     fi
+    echo
 
-    if [[ "$use_user_units" == true ]]; then
-        print_info "Настройка и запуск user-юнитов мониторинга под пользователем ${mon_sys_user}"
-        local ru_cmd="runuser -u ${mon_sys_user} --"
-        local xdg_env="XDG_RUNTIME_DIR=/run/user/${mon_sys_uid}"
-
-        # Перечитываем конфигурацию user-юнитов
-        $ru_cmd env "$xdg_env" systemctl --user daemon-reload >/dev/null 2>&1 || print_warning "Не удалось выполнить daemon-reload для user-юнитов"
-
-        # Включаем и перезапускаем Prometheus
-        $ru_cmd env "$xdg_env" systemctl --user enable monitoring-prometheus.service >/dev/null 2>&1 || print_warning "Не удалось включить автозапуск monitoring-prometheus.service"
-        $ru_cmd env "$xdg_env" systemctl --user restart monitoring-prometheus.service >/dev/null 2>&1 || print_error "Ошибка запуска monitoring-prometheus.service"
-        sleep 2
-        if $ru_cmd env "$xdg_env" systemctl --user is-active --quiet monitoring-prometheus.service; then
-            print_success "monitoring-prometheus.service успешно запущен (user-юнит)"
-        else
-            print_error "monitoring-prometheus.service не удалось запустить"
-            $ru_cmd env "$xdg_env" systemctl --user status monitoring-prometheus.service --no-pager | while IFS= read -r line; do
-                print_info "$line"
-                log_message "[PROMETHEUS USER SYSTEMD STATUS] $line"
-            done
-        fi
-        echo
-
-        # Включаем и перезапускаем Grafana
-        $ru_cmd env "$xdg_env" systemctl --user enable monitoring-grafana.service >/dev/null 2>&1 || print_warning "Не удалось включить автозапуск monitoring-grafana.service"
-        $ru_cmd env "$xdg_env" systemctl --user restart monitoring-grafana.service >/dev/null 2>&1 || print_error "Ошибка запуска monitoring-grafana.service"
-        sleep 2
-        if $ru_cmd env "$xdg_env" systemctl --user is-active --quiet monitoring-grafana.service; then
-            print_success "monitoring-grafana.service успешно запущен (user-юнит)"
-        else
-            print_error "monitoring-grafana.service не удалось запустить"
-            $ru_cmd env "$xdg_env" systemctl --user status monitoring-grafana.service --no-pager | while IFS= read -r line; do
-                print_info "$line"
-                log_message "[GRAFANA USER SYSTEMD STATUS] $line"
-            done
-        fi
-        echo
+    print_info "Настройка сервиса: grafana-server"
+    systemctl enable grafana-server >/dev/null 2>&1 || print_error "Ошибка включения автозапуска grafana-server"
+    systemctl restart grafana-server >/dev/null 2>&1 || print_error "Ошибка запуска grafana-server"
+    sleep 2
+    if systemctl is-active --quiet grafana-server; then
+        print_success "grafana-server успешно запущен и настроен на автозапуск"
+        # Ранее здесь был configure_grafana_datasource — перенесено после получения токена
     else
-        print_info "Настройка системных юнитов мониторинга (fallback)"
-
-        print_info "Настройка сервиса: prometheus"
-        systemctl enable prometheus >/dev/null 2>&1 || print_error "Ошибка включения автозапуска prometheus"
-        systemctl restart prometheus >/dev/null 2>&1 || print_error "Ошибка запуска prometheus"
-        sleep 2
-        if systemctl is-active --quiet prometheus; then
-            print_success "prometheus успешно запущен и настроен на автозапуск"
-        else
-            print_error "prometheus не удалось запустить"
-            systemctl status prometheus --no-pager | while IFS= read -r line; do
-                print_info "$line"
-                log_message "[PROMETHEUS SYSTEMD STATUS] $line"
-            done
-        fi
-        echo
-
-        print_info "Настройка сервиса: grafana-server"
-        systemctl enable grafana-server >/dev/null 2>&1 || print_error "Ошибка включения автозапуска grafana-server"
-        systemctl restart grafana-server >/dev/null 2>&1 || print_error "Ошибка запуска grafana-server"
-        sleep 2
-        if systemctl is-active --quiet grafana-server; then
-            print_success "grafana-server успешно запущен и настроен на автозапуск"
-            # Ранее здесь был configure_grafana_datasource — перенесено после получения токена
-        else
-            print_error "grafana-server не удалось запустить"
-            systemctl status grafana-server --no-pager | while IFS= read -r line; do
-                print_info "$line"
-                log_message "[GRAFANA SYSTEMD STATUS] $line"
-            done
-        fi
-        echo
+        print_error "grafana-server не удалось запустить"
+        systemctl status grafana-server --no-pager | while IFS= read -r line; do
+            print_info "$line"
+            log_message "[GRAFANA SYSTEMD STATUS] $line"
+        done
     fi
+    echo
 
     print_info "Настройка и запуск Harvest..."
     if systemctl is-active --quiet harvest 2>/dev/null; then
@@ -1937,12 +1649,7 @@ main() {
     check_dependencies
     check_and_close_ports
     detect_network_info
-  ensure_monitoring_users_in_as_admin
-  if [[ "${SKIP_RLM_RPM_TASKS:-false}" == "true" ]]; then
-      print_warning "SKIP_RLM_RPM_TASKS=true: пропускаем полную очистку предыдущих установок (cleanup_all_previous)"
-  else
-      cleanup_all_previous
-  fi
+    cleanup_all_previous
     create_directories
 
     # При необходимости можно пропустить установку Vault через RLM,
@@ -1955,17 +1662,11 @@ main() {
 
     setup_vault_config
     load_config_from_json
-    if [[ "${SKIP_RLM_RPM_TASKS:-false}" == "true" ]]; then
-        print_warning "SKIP_RLM_RPM_TASKS=true: пропускаем создание и ожидание RLM-задач установки RPM"
-        print_success "🎉 ВСЕ ЗАДАЧИ УСПЕШНО ЗАВЕРШЕНЫ! (этап установки RPM пропущен для дебага)"
-    else
-        create_rlm_install_tasks
-    fi
+    create_rlm_install_tasks
     setup_certificates_after_install
     configure_harvest
     configure_prometheus
     configure_iptables
-    setup_monitoring_user_units
     configure_services
     ensure_grafana_token
     configure_grafana_datasource

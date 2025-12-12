@@ -49,40 +49,7 @@ ALL=(ALL:ALL) NOEXEC: NOPASSWD: /bin/bash /tmp/deploy-monitoring/monitoring_depl
 
 
 ############################################################
-# 3. (Опционально) Модель CI → mon_sys для user-юнитов
-#
-# Если администраторы создают сервисную УЗ мониторинга
-#   CI12345678-lnx-mon_sys
-# и CI-пользователя
-#   CI12345678-lnx-mon_ci
-# а также включают linger для mon_sys и настраивают user-юниты
-#   monitoring-prometheus.service
-#   monitoring-grafana.service
-#   monitoring-harvest.service
-#   monitoring.target
-# то можно выдать CI-пользователю точечные права на systemctl --user
-# от имени mon_sys БЕЗ доступа к root.
-#
-# Пример (ЛИШЬ ДЛЯ ИЛЛЮСТРАЦИИ, БЕЗ ПЕРЕМЕННЫХ И ЗВЁЗДОЧЕК):
-#
-#CI12345678-lnx-mon_ci ALL=(CI12345678-lnx-mon_sys) NOPASSWD: \
-#    /usr/bin/systemctl --user daemon-reload, \
-#    /usr/bin/systemctl --user start monitoring-prometheus.service, \
-#    /usr/bin/systemctl --user restart monitoring-prometheus.service, \
-#    /usr/bin/systemctl --user start monitoring-grafana.service, \
-#    /usr/bin/systemctl --user restart monitoring-grafana.service, \
-#    /usr/bin/systemctl --user start monitoring-harvest.service, \
-#    /usr/bin/systemctl --user restart monitoring-harvest.service, \
-#    /usr/bin/systemctl --user start monitoring.target, \
-#    /usr/bin/systemctl --user restart monitoring.target
-#
-# В реальной заявке в IDM имена CI12345678-... подставляет администратор,
-# исходя из конкретного NAMESPACE_CI/тенанта. В правилах sudoers
-# не допускаются шаблоны и переменные, только конкретные УЗ и команды.
-############################################################
-
-############################################################
-# 4. Справочный список Linux-команд из скрипта
+# 3. Справочный список Linux-команд из скрипта
 #    deploy_monitoring_script.sh
 #
 # ВНИМАНИЕ:

@@ -17,7 +17,6 @@ pipeline {
         string(name: 'PROMETHEUS_PORT',    defaultValue: params.PROMETHEUS_PORT ?: '9090',description: 'Порт Prometheus')
         string(name: 'RLM_API_URL',        defaultValue: params.RLM_API_URL ?: '',        description: 'Базовый URL RLM API (например, https://api.rlm.sbrf.ru)')
         booleanParam(name: 'SKIP_VAULT_INSTALL', defaultValue: false, description: 'Пропустить установку Vault через RLM (использовать уже установленный vault-agent)')
-        booleanParam(name: 'SKIP_RLM_RPM_TASKS', defaultValue: false, description: 'Пропустить создание и ожидание RLM-задач установки RPM (для дебага последующих шагов)')
     }
 
     environment {
@@ -208,7 +207,6 @@ sudo -n env \
   SBERCA_CERT_KV="__SBERCA_CERT_KV__" \
   ADMIN_EMAIL="__ADMIN_EMAIL__" \
   SKIP_VAULT_INSTALL="__SKIP_VAULT_INSTALL__" \
-  SKIP_RLM_RPM_TASKS="__SKIP_RLM_RPM_TASKS__" \
   GRAFANA_URL="$RPM_GRAFANA" \
   PROMETHEUS_URL="$RPM_PROMETHEUS" \
   HARVEST_URL="$RPM_HARVEST" \
@@ -230,7 +228,6 @@ REMOTE_EOF
                             .replace('__SBERCA_CERT_KV__',     params.SBERCA_CERT_KV     ?: '')
                             .replace('__ADMIN_EMAIL__',        params.ADMIN_EMAIL        ?: '')
                             .replace('__SKIP_VAULT_INSTALL__', params.SKIP_VAULT_INSTALL ? 'true' : 'false')
-                            .replace('__SKIP_RLM_RPM_TASKS__', params.SKIP_RLM_RPM_TASKS ? 'true' : 'false')
                         writeFile file: 'deploy_script.sh', text: finalScript
                         sh 'chmod +x deploy_script.sh'
                         withEnv(['SSH_KEY=' + env.SSH_KEY, 'SSH_USER=' + env.SSH_USER]) {

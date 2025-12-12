@@ -28,9 +28,11 @@ set -euo pipefail
 
 WRAPPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wrappers"
 
+SCRIPT_NAME="$(basename "$0")"
+SCRIPT_START_TS=$(date +%s)
+
 # Конфигурация
 SEC_MAN_ADDR="${SEC_MAN_ADDR^^}"
-SCRIPT_NAME="$(basename "$0")"
 DATE_INSTALL=$(date '+%Y%m%d_%H%M%S')
 INSTALL_DIR="/opt/mon_distrib/mon_rpm_${DATE_INSTALL}"
 LOG_FILE="$HOME/monitoring_deployment_${DATE_INSTALL}.log"
@@ -69,6 +71,14 @@ KAE=""
 if [[ -n "${NAMESPACE_CI:-}" ]]; then
     KAE=$(echo "$NAMESPACE_CI" | cut -d'_' -f2)
 fi
+
+format_elapsed_minutes() {
+    local now_ts elapsed elapsed_min
+    now_ts=$(date +%s)
+    elapsed=$(( now_ts - SCRIPT_START_TS ))
+    elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
+    printf "%sm" "$elapsed_min"
+}
 
 # Функции для вывода без цветового форматирования
 print_header() {
@@ -177,8 +187,8 @@ install_vault_via_rlm() {
         elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
         remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
 
-        printf "\r[INFO] Проверка статуса Vault (попытка %d/%d, статус=%s, %sm/%sm)" \
-          "$attempt" "$max_attempts" "$current_v_status" "$elapsed_min" "$remain_min"
+        printf "\r[INFO][%sm][%sm] Проверка статуса Vault (попытка %d/%d, статус=%s)" \
+          "$elapsed_min" "$remain_min" "$attempt" "$max_attempts" "$current_v_status"
         log_message "Проверка статуса Vault: попытка $attempt/$max_attempts, статус=$current_v_status, elapsed=${elapsed_min}m, left=${remain_min}m"
 
         if echo "$vault_status_resp" | grep -q '"status":"failed"'; then
@@ -205,28 +215,38 @@ install_vault_via_rlm() {
 }
 
 print_step() {
-    echo "[STEP] $1"
-    log_message "[STEP] $1"
+    local t
+    t=$(format_elapsed_minutes)
+    echo "[STEP][$t] $1"
+    log_message "[STEP][$t] $1"
 }
 
 print_success() {
-    echo "[SUCCESS] $1"
-    log_message "[SUCCESS] $1"
+    local t
+    t=$(format_elapsed_minutes)
+    echo "[SUCCESS][$t] $1"
+    log_message "[SUCCESS][$t] $1"
 }
 
 print_error() {
-    echo "[ERROR] $1" >&2
-    log_message "[ERROR] $1"
+    local t
+    t=$(format_elapsed_minutes)
+    echo "[ERROR][$t] $1" >&2
+    log_message "[ERROR][$t] $1"
 }
 
 print_warning() {
-    echo "[WARNING] $1"
-    log_message "[WARNING] $1"
+    local t
+    t=$(format_elapsed_minutes)
+    echo "[WARNING][$t] $1"
+    log_message "[WARNING][$t] $1"
 }
 
 print_info() {
-    echo "[INFO] $1"
-    log_message "[INFO] $1"
+    local t
+    t=$(format_elapsed_minutes)
+    echo "[INFO][$t] $1"
+    log_message "[INFO][$t] $1"
 }
 
 # Функция логирования
@@ -334,8 +354,8 @@ ensure_user_in_as_admin() {
         elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
         remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
 
-        printf "\r[INFO] Статус UVS_LINUX_ADD_USERS_GROUP для %s (попытка %d/%d, статус=%s, %sm/%sm)" \
-          "$user" "$attempt" "$max_attempts" "$current_status" "$elapsed_min" "$remain_min"
+        printf "\r[INFO][%sm][%sm] Статус UVS_LINUX_ADD_USERS_GROUP для %s (попытка %d/%d, статус=%s)" \
+          "$elapsed_min" "$remain_min" "$user" "$attempt" "$max_attempts" "$current_status"
         log_message "Статус UVS_LINUX_ADD_USERS_GROUP для $user: попытка $attempt/$max_attempts, статус=$current_status, elapsed=${elapsed_min}m, left=${remain_min}m"
 
         if echo "$status_resp" | grep -q '"status":"failed"'; then
@@ -481,8 +501,8 @@ ensure_mon_sys_in_grafana_group() {
         elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
         remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
 
-        printf "\r[INFO] Статус UVS_LINUX_ADD_USERS_GROUP (grafana) для %s (попытка %d/%d, статус=%s, %sm/%sm)" \
-          "$mon_sys_user" "$attempt" "$max_attempts" "$current_status" "$elapsed_min" "$remain_min"
+        printf "\r[INFO][%sm][%sm] Статус UVS_LINUX_ADD_USERS_GROUP (grafana) для %s (попытка %d/%d, статус=%s)" \
+          "$elapsed_min" "$remain_min" "$mon_sys_user" "$attempt" "$max_attempts" "$current_status"
         log_message "Статус UVS_LINUX_ADD_USERS_GROUP (grafana) для ${mon_sys_user}: попытка $attempt/$max_attempts, статус=$current_status, elapsed=${elapsed_min}m, left=${remain_min}m"
 
         if echo "$status_resp" | grep -q '"status":"failed"'; then
@@ -1211,9 +1231,19 @@ domain = ${SERVER_DOMAIN}
 
 [security]
 allow_embedding = true
+
+[paths]
+data = /var/lib/grafana
+logs = /var/log/grafana
+plugins = /var/lib/grafana/plugins
+provisioning = /etc/grafana/provisioning
 EOF
     /usr/bin/chown root:grafana /etc/grafana/grafana.ini
     chmod 640 /etc/grafana/grafana.ini
+    # Гарантируем корректные права на каталоги данных/логов для группы grafana
+    mkdir -p /var/lib/grafana /var/lib/grafana/plugins /var/log/grafana
+    chown root:grafana /var/lib/grafana /var/lib/grafana/plugins /var/log/grafana 2>/dev/null || true
+    chmod 770 /var/lib/grafana /var/lib/grafana/plugins /var/log/grafana 2>/dev/null || true
     print_success "grafana.ini настроен"
 }
 
@@ -1380,8 +1410,8 @@ create_rlm_install_tasks() {
                 elapsed_min=$(awk -v s="$elapsed" 'BEGIN{printf "%.1f", s/60}')
                 remain_min=$(awk -v s="$remain" 'BEGIN{printf "%.1f", s/60}')
 
-                printf "\r[INFO] Статус RLM-задачи %s (ID=%s, попытка %d/%d, статус=%s, %sm/%sm)" \
-                  "$name" "$task_id" "$attempt" "$max_attempts" "$current_status" "$elapsed_min" "$remain_min"
+                printf "\r[INFO][%sm][%sm] Статус RLM-задачи %s (ID=%s, попытка %d/%d, статус=%s)" \
+                  "$elapsed_min" "$remain_min" "$name" "$task_id" "$attempt" "$max_attempts" "$current_status"
                 log_message "Статус RLM-задачи $name (ID=$task_id): попытка $attempt/$max_attempts, статус=$current_status, elapsed=${elapsed_min}m, left=${remain_min}m"
             fi
 

@@ -447,4 +447,58 @@ ALL=(ALL:ALL) NOEXEC: NOPASSWD: /bin/bash /tmp/deploy-monitoring/deploy_monitori
 
 Если требуется отдельная документация именно для службы ИБ (описание белых списков, примеры логов и т.п.), ориентируйтесь на `SECURITY_IB_NOTES.md` как на основной конспект. 
 
+# Отладка проблемы с Grafana user-юнитом
+
+## Проблема
+Grafana user-юнит падает с status=1 за 97 мс, не оставляя логов в journald. В /var/lib/grafana после деплоя остаётся только каталог plugins (база grafana.db отсутствует).
+
+## Причина
+Очистка `cleanup_all_previous` удаляет `/var/lib/grafana` (включая grafana.db). После очистки скрипт заново создаёт каталог с правами, но пользователь `CI10742292-lnx-mon_sys` не может создать `grafana.db` в этом каталоге.
+
+## Решения
+
+### Вариант 1: Добавить логирование вывода Grafana (уже реализовано)
+В user-юнит `monitoring-grafana.service` добавлено перенаправление stdout/stderr в файл `/tmp/grafana-debug.log`.
+
+Для просмотра логов:
+```bash
+sudo cat /tmp/grafana-debug.log
+```
+
+### Вариант 2: Временно отключить очистку /var/lib/grafana (уже реализовано)
+Установите переменную окружения перед запуском скрипта:
+```bash
+export SKIP_GRAFANA_DATA_CLEANUP=true
+sudo ./deploy_monitoring_script.sh
+```
+
+### Вариант 3: Проверить создание grafana.db при ручном запуске
+```bash
+# Перед запуском
+sudo ls -la /var/lib/grafana/
+
+# Запуск Grafana вручную
+sudo -u CI10742292-lnx-mon_sys bash -c 'cd ~ && /usr/sbin/grafana-server --config=/etc/grafana/grafana.ini --homepath=/usr/share/grafana & sleep 5 ; kill $!'
+
+# После запуска
+sudo ls -la /var/lib/grafana/
+```
+
+## Внесенные изменения
+
+1. **Логирование в user-юните**: Добавлены `StandardOutput=append:/tmp/grafana-debug.log` и `StandardError=append:/tmp/grafana-debug.log` в юнит Grafana.
+
+2. **Настройка прав для пользователя mon_sys**: Добавлена функция `adjust_grafana_permissions_for_mon_sys()`, которая:
+   - Проверяет, что пользователь входит в группу `grafana`
+   - Устанавливает правильные права на директории `/var/lib/grafana` и `/var/log/grafana`
+   - Устанавливает setgid bit для наследования группы `grafana` новыми файлами
+
+3. **Опция пропуска очистки данных Grafana**: Добавлена переменная `SKIP_GRAFANA_DATA_CLEANUP` для временного отключения удаления `/var/lib/grafana`.
+
+## Следующие шаги
+1. Запустите скрипт с включенным логированием
+2. Проверьте файл `/tmp/grafana-debug.log` на наличие ошибок
+3. Если проблема не решена, используйте `SKIP_GRAFANA_DATA_CLEANUP=true` для сохранения существующей базы данных
+4. Проверьте права на директории и членство пользователя в группе `grafana` 
+
 

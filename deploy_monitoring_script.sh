@@ -721,6 +721,12 @@ cleanup_all_previous() {
 
 
     for dir in "${dirs_to_clean[@]}"; do
+        # Пропускаем очистку /var/lib/grafana если установлена переменная SKIP_GRAFANA_DATA_CLEANUP
+        if [[ "$dir" == "/var/lib/grafana" && "${SKIP_GRAFANA_DATA_CLEANUP:-false}" == "true" ]]; then
+            print_info "Пропускаем удаление директории: $dir (SKIP_GRAFANA_DATA_CLEANUP=true)"
+            continue
+        fi
+        
         if [[ -d "$dir" ]]; then
             print_info "Удаление директории: $dir"
             rm -rf "$dir" || true
@@ -1175,6 +1181,8 @@ After=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/sbin/grafana-server --config=/etc/grafana/grafana.ini --homepath=/usr/share/grafana
+StandardOutput=append:/tmp/grafana-debug.log
+StandardError=append:/tmp/grafana-debug.log
 Restart=on-failure
 
 [Install]
@@ -1864,6 +1872,9 @@ configure_services() {
 
         # Перед запуском Prometheus настраиваем права на его файлы/директории
         adjust_prometheus_permissions_for_mon_sys
+        
+        # Перед запуском Grafana настраиваем права на её файлы/директории
+        adjust_grafana_permissions_for_mon_sys
 
         # Перечитываем конфигурацию user-юнитов
         $ru_cmd env "$xdg_env" systemctl --user daemon-reload >/dev/null 2>&1 || print_warning "Не удалось выполнить daemon-reload для user-юнитов"
@@ -2260,3 +2271,82 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
+
+# Настройка прав для Grafana при запуске как user-юнит под ${KAE}-lnx-mon_sys
+adjust_grafana_permissions_for_mon_sys() {
+    print_step "Адаптация прав Grafana для user-юнита под ${KAE}-lnx-mon_sys"
+    ensure_working_directory
+
+    if [[ -z "${KAE:-}" ]]; then
+        print_warning "KAE не определён (NAMESPACE_CI пуст), пропускаем настройку прав Grafana для mon_sys"
+        return 0
+    fi
+
+    local mon_sys_user="${KAE}-lnx-mon_sys"
+    if ! id "$mon_sys_user" >/dev/null 2>&1; then
+        print_warning "Пользователь ${mon_sys_user} не найден, пропускаем настройку прав Grafana для mon_sys"
+        return 0
+    fi
+
+    # Проверяем, что пользователь входит в группу grafana
+    if ! id "$mon_sys_user" | grep -q '\bgrafana\b'; then
+        print_warning "Пользователь ${mon_sys_user} не состоит в группе grafana"
+        print_info "Добавление пользователя ${mon_sys_user} в группу grafana..."
+        usermod -a -G grafana "$mon_sys_user" 2>/dev/null || print_warning "Не удалось добавить пользователя в группу grafana"
+    fi
+
+    # Каталоги и файлы Grafana, которые должны быть доступны mon_sys
+    local grafana_data_dir="/var/lib/grafana"
+    local grafana_log_dir="/var/log/grafana"
+    local grafana_cert_dir="/etc/grafana/cert"
+    local grafana_config="/etc/grafana/grafana.ini"
+
+    # Директория с данными Grafana
+    if [[ -d "$grafana_data_dir" ]]; then
+        print_info "Настройка владельца/прав данных Grafana для ${mon_sys_user}"
+        # Устанавливаем владельца как mon_sys:grafana для возможности записи
+        chown -R "${mon_sys_user}:grafana" "$grafana_data_dir" 2>/dev/null || print_warning "Не удалось изменить владельца $grafana_data_dir"
+        chmod 775 "$grafana_data_dir" 2>/dev/null || true
+        # Устанавливаем setgid bit, чтобы новые файлы наследовали группу grafana
+        chmod g+s "$grafana_data_dir" 2>/dev/null || true
+    else
+        print_warning "Каталог данных Grafana ($grafana_data_dir) не найден, создаем..."
+        mkdir -p "$grafana_data_dir"
+        chown "${mon_sys_user}:grafana" "$grafana_data_dir" 2>/dev/null || true
+        chmod 775 "$grafana_data_dir" 2>/dev/null || true
+        chmod g+s "$grafana_data_dir" 2>/dev/null || true
+    fi
+
+    # Директория с логами Grafana
+    if [[ -d "$grafana_log_dir" ]]; then
+        print_info "Настройка владельца/прав логов Grafana для ${mon_sys_user}"
+        chown -R "${mon_sys_user}:grafana" "$grafana_log_dir" 2>/dev/null || print_warning "Не удалось изменить владельца $grafana_log_dir"
+        chmod 775 "$grafana_log_dir" 2>/dev/null || true
+        chmod g+s "$grafana_log_dir" 2>/dev/null || true
+    else
+        print_warning "Каталог логов Grafana ($grafana_log_dir) не найден, создаем..."
+        mkdir -p "$grafana_log_dir"
+        chown "${mon_sys_user}:grafana" "$grafana_log_dir" 2>/dev/null || true
+        chmod 775 "$grafana_log_dir" 2>/dev/null || true
+        chmod g+s "$grafana_log_dir" 2>/dev/null || true
+    fi
+
+    # Сертификаты Grafana
+    if [[ -d "$grafana_cert_dir" ]]; then
+        print_info "Настройка владельца/прав сертификатов Grafana для ${mon_sys_user}"
+        chown -R "${mon_sys_user}:grafana" "$grafana_cert_dir" 2>/dev/null || print_warning "Не удалось изменить владельца $grafana_cert_dir"
+        chmod 640 "$grafana_cert_dir"/crt.crt 2>/dev/null || true
+        chmod 640 "$grafana_cert_dir"/key.key 2>/dev/null || true
+    else
+        print_warning "Каталог сертификатов Grafana ($grafana_cert_dir) не найден"
+    fi
+
+    # Конфиг Grafana
+    if [[ -f "$grafana_config" ]]; then
+        print_info "Настройка владельца/прав конфига Grafana для ${mon_sys_user}"
+        chown "${mon_sys_user}:grafana" "$grafana_config" 2>/dev/null || print_warning "Не удалось изменить владельца $grafana_config"
+        chmod 640 "$grafana_config" 2>/dev/null || true
+    fi
+
+    print_success "Права Grafana адаптированы для запуска под ${mon_sys_user} (user-юнит)"
+}

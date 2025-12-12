@@ -1868,6 +1868,13 @@ configure_services() {
         # Перечитываем конфигурацию user-юнитов
         $ru_cmd env "$xdg_env" systemctl --user daemon-reload >/dev/null 2>&1 || print_warning "Не удалось выполнить daemon-reload для user-юнитов"
 
+        # Сбрасываем предыдущее failed-состояние, чтобы StartLimitBurst
+        # не блокировал перезапуск юнитов после неудачных попыток
+        $ru_cmd env "$xdg_env" systemctl --user reset-failed \
+            monitoring-prometheus.service \
+            monitoring-grafana.service \
+            >/dev/null 2>&1 || print_warning "Не удалось выполнить reset-failed для user-юнитов мониторинга"
+
         # Включаем и перезапускаем Prometheus
         $ru_cmd env "$xdg_env" systemctl --user enable monitoring-prometheus.service >/dev/null 2>&1 || print_warning "Не удалось включить автозапуск monitoring-prometheus.service"
         $ru_cmd env "$xdg_env" systemctl --user restart monitoring-prometheus.service >/dev/null 2>&1 || print_error "Ошибка запуска monitoring-prometheus.service"
@@ -2222,7 +2229,15 @@ main() {
 
     setup_vault_config
     load_config_from_json
-    create_rlm_install_tasks
+
+    # При необходимости можно пропустить установку RPM-пакетов через RLM,
+    # чтобы ускорить отладку (по аналогии с SKIP_VAULT_INSTALL).
+    if [[ "${SKIP_RPM_INSTALL:-false}" == "true" ]]; then
+        print_warning "SKIP_RPM_INSTALL=true: пропускаем create_rlm_install_tasks, предполагаем что пакеты уже установлены"
+    else
+        create_rlm_install_tasks
+    fi
+
     setup_certificates_after_install
     configure_harvest
     configure_prometheus

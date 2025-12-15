@@ -1980,6 +1980,28 @@ setup_grafana_datasource_and_dashboards() {
     print_step "Настройка Prometheus datasource и дашбордов в Grafana"
     ensure_working_directory
     
+    # Файл для детального логирования диагностики
+    local DIAGNOSIS_LOG="/tmp/grafana_diagnosis_$(date +%Y%m%d_%H%M%S).log"
+    print_info "Детальная диагностика сохраняется в: $DIAGNOSIS_LOG"
+    
+    # Функция для записи в лог-файл
+    log_diagnosis() {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$DIAGNOSIS_LOG"
+    }
+    
+    # Начало диагностики
+    log_diagnosis "=== НАЧАЛО ДИАГНОСТИКИ GRAFANA ==="
+    log_diagnosis "Функция: setup_grafana_datasource_and_dashboards"
+    log_diagnosis "Время: $(date)"
+    log_diagnosis "Пользователь: $(whoami)"
+    log_diagnosis "PID: $$"
+    
+    # Принудительное использование localhost если задана переменная
+    if [[ "${USE_GRAFANA_LOCALHOST:-false}" == "true" ]]; then
+        print_warning "Используем localhost вместо $SERVER_DOMAIN (USE_GRAFANA_LOCALHOST=true)"
+        export SERVER_DOMAIN="localhost"
+    fi
+    
     local grafana_url="https://${SERVER_DOMAIN}:${GRAFANA_PORT}"
     
     # Диагностическая информация
@@ -1988,6 +2010,12 @@ setup_grafana_datasource_and_dashboards() {
     print_info "GRAFANA_PORT: ${GRAFANA_PORT}"
     print_info "SERVER_DOMAIN: ${SERVER_DOMAIN}"
     print_info "Текущий токен установлен: $( [[ -n "$GRAFANA_BEARER_TOKEN" ]] && echo "ДА" || echo "НЕТ" )"
+    
+    # Проверка различий между localhost и доменным именем
+    print_info "Проверка доступности через разные адреса:"
+    print_info "  localhost:3000 - $(curl -k -s -o /dev/null -w "%{http_code}" "https://localhost:3000/api/health" 2>/dev/null || echo "ERROR")"
+    print_info "  127.0.0.1:3000 - $(curl -k -s -o /dev/null -w "%{http_code}" "https://127.0.0.1:3000/api/health" 2>/dev/null || echo "ERROR")"
+    print_info "  ${SERVER_DOMAIN}:3000 - $(curl -k -s -o /dev/null -w "%{http_code}" "https://${SERVER_DOMAIN}:3000/api/health" 2>/dev/null || echo "ERROR")"
     
     # Проверяем доступность Grafana - просто проверяем что порт слушается
     # Не делаем HTTP/HTTPS запросы, так как Grafana может требовать клиентские сертификаты
@@ -2104,9 +2132,25 @@ setup_grafana_datasource_and_dashboards() {
         
         # Функция для создания сервисного аккаунта через API
         create_service_account_via_api() {
+            print_info "=== НАЧАЛО create_service_account_via_api ==="
+            log_diagnosis "=== ВХОД В create_service_account_via_api ==="
+            
+            print_info "Параметры функции:"
+            print_info "  service_account_name: $service_account_name"
+            print_info "  grafana_url: $grafana_url"
+            print_info "  grafana_user: $grafana_user"
+            
+            log_diagnosis "Параметры функции:"
+            log_diagnosis "  service_account_name: $service_account_name"
+            log_diagnosis "  grafana_url: $grafana_url"
+            log_diagnosis "  grafana_user: $grafana_user"
+            log_diagnosis "  grafana_password: ***** (длина: ${#grafana_password})"
+            
             local sa_payload sa_response http_code sa_body sa_id
             
             sa_payload=$(jq -n --arg name "$service_account_name" --arg role "Admin" '{name:$name, role:$role}')
+            print_info "Payload для создания сервисного аккаунта: $sa_payload"
+            log_diagnosis "Payload для создания сервисного аккаунта: $sa_payload"
             
             # Сначала проверим доступность API
             print_info "Проверка доступности Grafana API перед созданием сервисного аккаунта..."
@@ -2142,8 +2186,12 @@ setup_grafana_datasource_and_dashboards() {
                     -d \"$sa_payload\" \
                     \"${grafana_url}/api/serviceaccounts\""
                 print_info "Используем клиентские сертификаты для mTLS"
+                log_diagnosis "Используем клиентские сертификаты для mTLS"
+                log_diagnosis "Сертификат: /opt/vault/certs/grafana-client.crt (размер: $(stat -c%s "/opt/vault/certs/grafana-client.crt" 2>/dev/null || echo "не найден"))"
+                log_diagnosis "Ключ: /opt/vault/certs/grafana-client.key (размер: $(stat -c%s "/opt/vault/certs/grafana-client.key" 2>/dev/null || echo "не найден"))"
             else
                 print_info "Клиентские сертификаты не найдены, используем базовую аутентификацию"
+                log_diagnosis "Клиентские сертификаты не найдены, используем базовую аутентификацию"
             fi
             
             # Логируем команду (без пароля)
@@ -2151,9 +2199,50 @@ setup_grafana_datasource_and_dashboards() {
             print_info "Выполнение API запроса: $safe_curl_cmd"
             print_info "Payload: $sa_payload"
             
-            sa_response=$(eval "$curl_cmd" 2>&1)
+            log_diagnosis "CURL команда (без пароля): $safe_curl_cmd"
+            log_diagnosis "Полная CURL команда: $(echo "$curl_cmd" | sed "s/${grafana_password}/*****/g")"
+            log_diagnosis "Payload: $sa_payload"
+            log_diagnosis "Endpoint: ${grafana_url}/api/serviceaccounts"
+            log_diagnosis "Время начала запроса: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
+            
+            print_info "Выполнение curl команды для создания сервисного аккаунта..."
+            log_diagnosis "Начало выполнения curl команды..."
+            
+            local curl_start_time=$(date +%s.%3N)
+            if ! sa_response=$(eval "$curl_cmd" 2>&1); then
+                local curl_end_time=$(date +%s.%3N)
+                local curl_duration=$(echo "$curl_end_time - $curl_start_time" | bc)
+                
+                print_error "ОШИБКА выполнения curl команды!"
+                print_info "Команда: $safe_curl_cmd"
+                print_info "Ошибка: $sa_response"
+                
+                log_diagnosis "❌ ОШИБКА выполнения curl команды!"
+                log_diagnosis "Время выполнения: ${curl_duration} секунд"
+                log_diagnosis "Команда: $safe_curl_cmd"
+                log_diagnosis "Полная ошибка: $sa_response"
+                log_diagnosis "Код возврата: $?"
+                log_diagnosis "Время ошибки: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
+                
+                echo ""
+                return 2
+            fi
+            
+            local curl_end_time=$(date +%s.%3N)
+            local curl_duration=$(echo "$curl_end_time - $curl_start_time" | bc)
+            
             http_code=$(echo "$sa_response" | tail -1)
             sa_body=$(echo "$sa_response" | head -n -1)
+            
+            print_info "Ответ получен, HTTP код: $http_code"
+            log_diagnosis "✅ Ответ получен"
+            log_diagnosis "Время выполнения: ${curl_duration} секунд"
+            log_diagnosis "HTTP код: $http_code"
+            log_diagnosis "Полный ответ:"
+            log_diagnosis "$sa_response"
+            log_diagnosis "--- КОНЕЦ ОТВЕТА ---"
+            log_diagnosis "Тело ответа (сырое): $sa_body"
+            log_diagnosis "Время получения ответа: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
             
             # Логируем ответ для диагностики
             print_info "Ответ API создания сервисного аккаунта: HTTP $http_code"
@@ -2168,20 +2257,31 @@ setup_grafana_datasource_and_dashboards() {
                 echo
             fi
             
+            log_diagnosis "Проверка HTTP кода: $http_code"
+            
             if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+                log_diagnosis "✅ HTTP код успешный: $http_code"
                 sa_id=$(echo "$sa_body" | jq -r '.id // empty')
+                log_diagnosis "Извлеченный ID из ответа: '$sa_id'"
+                log_diagnosis "Полный JSON ответ: $sa_body"
+                
                 if [[ -n "$sa_id" && "$sa_id" != "null" ]]; then
                     print_success "Сервисный аккаунт создан через API, ID: $sa_id"
+                    log_diagnosis "✅ Сервисный аккаунт создан, ID: $sa_id"
+                    log_diagnosis "=== УСПЕШНОЕ СОЗДАНИЕ СЕРВИСНОГО АККАУНТА ==="
                     echo "$sa_id"
                     return 0
                 else
                     print_warning "Сервисный аккаунт создан, но ID не получен"
+                    log_diagnosis "⚠️  Сервисный аккаунт создан, но ID не получен"
+                    log_diagnosis "Тело ответа для анализа: $sa_body"
                     echo ""
                     return 2  # Специальный код для "частичного успеха"
                 fi
             elif [[ "$http_code" == "409" ]]; then
                 # Сервисный аккаунт уже существует
                 print_info "Сервисный аккаунт уже существует, получаем ID..."
+                log_diagnosis "⚠️  Сервисный аккаунт уже существует (HTTP 409), получаем ID..."
                 
                 local list_cmd="curl -k -s -w \"\n%{http_code}\" \
                     -u \"${grafana_user}:${grafana_password}\" \
@@ -2195,34 +2295,60 @@ setup_grafana_datasource_and_dashboards() {
                         \"${grafana_url}/api/serviceaccounts?query=${service_account_name}\""
                 fi
                 
+                log_diagnosis "Команда для получения списка: $(echo "$list_cmd" | sed "s/${grafana_password}/*****/g")"
                 list_response=$(eval "$list_cmd" 2>&1)
                 list_code=$(echo "$list_response" | tail -1)
                 list_body=$(echo "$list_response" | head -n -1)
                 
                 print_info "Ответ API получения списка сервисных аккаунтов: HTTP $list_code"
+                log_diagnosis "Ответ получения списка: HTTP $list_code"
+                log_diagnosis "Тело ответа списка: $list_body"
                 
                 if [[ "$list_code" == "200" ]]; then
                     sa_id=$(echo "$list_body" | jq -r '.serviceAccounts[] | select(.name=="'"$service_account_name"'") | .id' | head -1)
+                    log_diagnosis "Извлеченный ID из списка: '$sa_id'"
+                    
                     if [[ -n "$sa_id" && "$sa_id" != "null" ]]; then
                         print_success "Найден существующий сервисный аккаунт, ID: $sa_id"
+                        log_diagnosis "✅ Найден существующий сервисный аккаунт, ID: $sa_id"
                         echo "$sa_id"
                         return 0
                     else
                         print_warning "Сервисный аккаунт найден в списке, но ID не получен"
+                        log_diagnosis "⚠️  Сервисный аккаунт в списке, но ID не получен"
+                        log_diagnosis "Полный список: $list_body"
                         echo ""
                         return 2
                     fi
                 else
                     print_warning "Не удалось получить список сервисных аккаунтов через API (HTTP $list_code)"
+                    log_diagnosis "❌ Не удалось получить список (HTTP $list_code)"
+                    log_diagnosis "Ответ: $list_response"
                     echo ""
                     return 2
                 fi
             else
                 print_warning "API запрос создания сервисного аккаунта не удался (HTTP $http_code)"
+                log_diagnosis "❌ API запрос не удался (HTTP $http_code)"
+                log_diagnosis "Полный ответ: $sa_response"
+                log_diagnosis "Тело ответа: $sa_body"
+                
+                # Детальный анализ ошибки
+                log_diagnosis "=== АНАЛИЗ ОШИБКИ ==="
+                log_diagnosis "URL: ${grafana_url}/api/serviceaccounts"
+                log_diagnosis "Метод: POST"
+                log_diagnosis "Пользователь: $grafana_user"
+                log_diagnosis "Время: $(date)"
+                
                 echo ""
                 return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
             fi
         }
+        
+        log_diagnosis "=== РЕЗУЛЬТАТ create_service_account_via_api ==="
+        log_diagnosis "Код возврата: $sa_result"
+        log_diagnosis "SA ID: '$sa_id'"
+        log_diagnosis "=== КОНЕЦ create_service_account_via_api ==="
         
         # Функция для создания токена через API
         create_token_via_api() {
@@ -2275,9 +2401,18 @@ setup_grafana_datasource_and_dashboards() {
         }
         
         # Пробуем получить токен через API
+        print_info "Вызов функции create_service_account_via_api..."
         local sa_id
         sa_id=$(create_service_account_via_api)
         local sa_result=$?
+        print_info "Результат create_service_account_via_api: код $sa_result, sa_id='$sa_id'"
+        
+        # Логируем ВСЕ детали для отладки пайплайна
+        print_info "=== ОТЛАДКА ПАЙПЛАЙНА ==="
+        print_info "sa_result: $sa_result"
+        print_info "sa_id: '$sa_id'"
+        print_info "grafana_url: $grafana_url"
+        print_info "service_account_name: $service_account_name"
         
         if [[ $sa_result -eq 0 && -n "$sa_id" ]]; then
             # Успешно создали сервисный аккаунт, пробуем создать токен
@@ -2317,17 +2452,41 @@ setup_grafana_datasource_and_dashboards() {
                 return 0  # Возвращаем успех, но пропускаем настройку
             fi
         else
-            # Другие ошибки (например, код 1)
-            print_warning "Не удалось создать сервисный аккаунт через API (код $sa_result). Пробуем использовать старую функцию ensure_grafana_token..."
+            # Другие ошибки (например, код 1 или 2)
+            print_warning "Не удалось создать сервисный аккаунт через API (код $sa_result)."
             
-            # Fallback на старую функцию
-            print_info "Пробуем получить токен через старую функцию ensure_grafana_token..."
-            if ensure_grafana_token; then
-                print_success "Токен получен через старую функцию ensure_grafana_token"
+            # Пробуем с localhost вместо доменного имени
+            print_info "Пробуем с localhost вместо $SERVER_DOMAIN..."
+            local original_domain="$SERVER_DOMAIN"
+            export SERVER_DOMAIN="localhost"
+            local local_grafana_url="https://localhost:${GRAFANA_PORT}"
+            
+            print_info "Новый URL: $local_grafana_url"
+            print_info "Повторная попытка с localhost..."
+            
+            # Сбрасываем переменные и пробуем снова
+            unset sa_id sa_result
+            service_account_name="harvest-service-account-localhost_$(date +%s)"
+            sa_id=$(create_service_account_via_api)
+            sa_result=$?
+            
+            # Восстанавливаем оригинальный домен
+            export SERVER_DOMAIN="$original_domain"
+            
+            if [[ $sa_result -eq 0 && -n "$sa_id" ]]; then
+                print_success "Успешно с localhost! Продолжаем создание токена..."
+                # Здесь будет продолжение создания токена
             else
-                print_warning "Старая функция тоже не сработала. Пропускаем настройку токена."
-                print_info "Datasource и дашборды могут быть настроены вручную через UI Grafana"
-                return 0  # Возвращаем успех, но пропускаем настройку
+                print_warning "Не сработало даже с localhost. Пробуем старую функцию ensure_grafana_token..."
+                
+                # Fallback на старую функцию
+                if ensure_grafana_token; then
+                    print_success "Токен получен через старую функцию ensure_grafana_token"
+                else
+                    print_warning "Все методы не сработали. Пропускаем настройку токена."
+                    print_info "Datasource и дашборды могут быть настроены вручную через UI Grafana"
+                    return 0  # Возвращаем успех, но пропускаем настройку
+                fi
             fi
         fi
     fi

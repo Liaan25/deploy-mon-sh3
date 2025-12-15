@@ -2019,9 +2019,45 @@ setup_grafana_datasource_and_dashboards() {
     print_info "Проверка файла с учетными данными: $cred_json"
     if [[ -f "$cred_json" ]]; then
         print_info "Файл существует, размер: $(stat -c%s "$cred_json" 2>/dev/null || echo "неизвестно") байт"
+        
+        # Проверка формата JSON
+        print_info "Проверка формата JSON файла..."
+        if jq empty "$cred_json" 2>/dev/null; then
+            print_success "JSON файл валиден"
+        else
+            print_warning "JSON файл имеет проблемы с форматом, пробуем исправить..."
+            
+            # Сохраняем оригинальный файл
+            cp "$cred_json" "${cred_json}.backup" 2>/dev/null
+            
+            # Исправляем возможные проблемы
+            # 1. Убираем Windows line endings
+            sed -i 's/\r$//' "$cred_json" 2>/dev/null
+            # 2. Убираем лишние запятые в конце объектов/массивов
+            sed -i 's/,\s*}/}/g' "$cred_json" 2>/dev/null
+            sed -i 's/,\s*]/]/g' "$cred_json" 2>/dev/null
+            # 3. Убираем лишние пробелы
+            sed -i 's/^[[:space:]]*//;s/[[:space:]]*$//' "$cred_json" 2>/dev/null
+            
+            if jq empty "$cred_json" 2>/dev/null; then
+                print_success "JSON файл исправлен"
+            else
+                print_error "Не удалось исправить JSON файл"
+                print_info "Оригинальное содержимое (первые 500 символов):"
+                head -c 500 "${cred_json}.backup" 2>/dev/null | cat -A || true
+                echo
+                return 1
+            fi
+        fi
+        
         print_info "Содержимое файла (первые 200 символов):"
         head -c 200 "$cred_json" 2>/dev/null | cat -A || true
         echo
+        
+        # Показываем структуру JSON
+        print_info "Структура JSON файла:"
+        jq 'keys' "$cred_json" 2>/dev/null || echo "Не удалось прочитать структуру"
+        
     else
         print_error "Файл с учетными данными не найден: $cred_json"
         print_info "Поиск альтернативных файлов..."
@@ -2062,6 +2098,21 @@ setup_grafana_datasource_and_dashboards() {
             
             sa_payload=$(jq -n --arg name "$service_account_name" --arg role "Admin" '{name:$name, role:$role}')
             
+            # Сначала проверим доступность API
+            print_info "Проверка доступности Grafana API перед созданием сервисного аккаунта..."
+            local test_cmd="curl -k -s -w \"\n%{http_code}\" -u \"${grafana_user}:*****\" \"${grafana_url}/api/health\""
+            local test_response=$(eval "curl -k -s -w \"\n%{http_code}\" -u \"${grafana_user}:${grafana_password}\" \"${grafana_url}/api/health\"" 2>&1)
+            local test_code=$(echo "$test_response" | tail -1)
+            local test_body=$(echo "$test_response" | head -n -1)
+            
+            print_info "Проверка API /api/health: HTTP $test_code"
+            if [[ "$test_code" != "200" ]]; then
+                print_warning "Grafana API /api/health недоступен (HTTP $test_code)"
+                print_info "Тело ответа: $(echo "$test_body" | head -c 200)"
+                echo ""
+                return 2
+            fi
+            
             # Пробуем с клиентскими сертификатами если они есть
             local curl_cmd="curl -k -s -w \"\n%{http_code}\" \
                 -X POST \
@@ -2080,15 +2131,32 @@ setup_grafana_datasource_and_dashboards() {
                     -u \"${grafana_user}:${grafana_password}\" \
                     -d \"$sa_payload\" \
                     \"${grafana_url}/api/serviceaccounts\""
+                print_info "Используем клиентские сертификаты для mTLS"
+            else
+                print_info "Клиентские сертификаты не найдены, используем базовую аутентификацию"
             fi
             
-            print_info "Выполнение API запроса для создания сервисного аккаунта..."
+            # Логируем команду (без пароля)
+            local safe_curl_cmd=$(echo "$curl_cmd" | sed "s/-u \"${grafana_user}:${grafana_password}\"/-u \"${grafana_user}:*****\"/")
+            print_info "Выполнение API запроса: $safe_curl_cmd"
+            print_info "Payload: $sa_payload"
+            
             sa_response=$(eval "$curl_cmd" 2>&1)
             http_code=$(echo "$sa_response" | tail -1)
             sa_body=$(echo "$sa_response" | head -n -1)
             
             # Логируем ответ для диагностики
             print_info "Ответ API создания сервисного аккаунта: HTTP $http_code"
+            
+            # Детальное логирование при ошибках
+            if [[ "$http_code" != "200" && "$http_code" != "201" && "$http_code" != "409" ]]; then
+                print_warning "Ошибка API при создании сервисного аккаунта"
+                print_info "Полный ответ:"
+                echo "$sa_response"
+                print_info "Тело ответа (первые 500 символов):"
+                echo "$sa_body" | head -c 500
+                echo
+            fi
             
             if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
                 sa_id=$(echo "$sa_body" | jq -r '.id // empty')
@@ -2240,9 +2308,17 @@ setup_grafana_datasource_and_dashboards() {
             fi
         else
             # Другие ошибки (например, код 1)
-            print_warning "Не удалось создать сервисный аккаунт через API (код $sa_result). Пропускаем настройку токена."
-            print_info "Datasource и дашборды могут быть настроены вручную через UI Grafana"
-            return 0  # Возвращаем успех, но пропускаем настройку
+            print_warning "Не удалось создать сервисный аккаунт через API (код $sa_result). Пробуем использовать старую функцию ensure_grafana_token..."
+            
+            # Fallback на старую функцию
+            print_info "Пробуем получить токен через старую функцию ensure_grafana_token..."
+            if ensure_grafana_token; then
+                print_success "Токен получен через старую функцию ensure_grafana_token"
+            else
+                print_warning "Старая функция тоже не сработала. Пропускаем настройку токена."
+                print_info "Datasource и дашборды могут быть настроены вручную через UI Grafana"
+                return 0  # Возвращаем успех, но пропускаем настройку
+            fi
         fi
     fi
     

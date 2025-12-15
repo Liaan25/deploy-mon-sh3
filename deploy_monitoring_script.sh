@@ -1842,6 +1842,12 @@ check_grafana_availability() {
                     # Проверяем что процесс слушает порт
                     if ss -tln | grep -q ":${GRAFANA_PORT} "; then
                         print_success "Grafana слушает порт ${GRAFANA_PORT}"
+                        print_info "Проверка процесса grafana..."
+                        if pgrep -f "grafana" >/dev/null 2>&1; then
+                            print_success "Процесс grafana найден"
+                        else
+                            print_warning "Процесс grafana не найден по имени, но порт слушается"
+                        fi
                         return 0
                     else
                         print_info "Grafana юнит активен, но порт ${GRAFANA_PORT} не слушается (попытка $attempt/$max_attempts)"
@@ -1999,11 +2005,15 @@ setup_grafana_datasource_and_dashboards() {
     fi
     
     # Дополнительная проверка - процесс Grafana запущен
-    print_info "Проверка процесса grafana-server..."
-    pgrep -f "grafana-server" && print_info "Процесс grafana-server найден" || print_info "Процесс grafana-server не найден"
+    print_info "Проверка процесса grafana..."
+    pgrep -f "grafana" && print_info "Процесс grafana найден" || print_info "Процесс grafana не найден"
     
-    if ! pgrep -f "grafana-server" >/dev/null 2>&1; then
-        print_error "Процесс grafana-server не найден"
+    # Опция для пропуска проверки процесса (временное решение)
+    if [[ "${SKIP_GRAFANA_PROCESS_CHECK:-false}" == "true" ]]; then
+        print_warning "Пропускаем проверку процесса grafana (SKIP_GRAFANA_PROCESS_CHECK=true)"
+        print_info "Убедитесь что Grafana действительно запущена"
+    elif ! pgrep -f "grafana" >/dev/null 2>&1; then
+        print_error "Процесс grafana не найден"
         print_info "Текущие процессы:"
         ps aux | grep -i grafana | head -10
         return 1
@@ -3017,11 +3027,13 @@ main() {
     configure_services
     
     # Настраиваем Grafana datasource и дашборды
+    print_info "Проверка доступности Grafana перед настройкой..."
     if ! check_grafana_availability; then
         print_error "Grafana не доступна. Пропускаем настройку datasource и дашбордов."
         print_info "Проверьте логи Grafana: /tmp/grafana-debug.log"
         print_info "Запустите скрипт отладки: sudo ./debug_grafana.sh"
     else
+        print_success "Grafana доступна, начинаем настройку datasource и дашбордов"
         setup_grafana_datasource_and_dashboards
     fi
 

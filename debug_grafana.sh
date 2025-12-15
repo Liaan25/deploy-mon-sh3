@@ -122,3 +122,4 @@ echo "Рекомендации:"
 echo "1. Проверьте файл /tmp/grafana-debug.log после перезапуска юнита"
 echo "2. Используйте export SKIP_GRAFANA_DATA_CLEANUP=true перед запуском deploy_monitoring_script.sh"
 echo "3. Убедитесь, что порт 3000 не занят другим процессом"
+

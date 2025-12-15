@@ -112,3 +112,55 @@ sudo -u CI10742292-lnx-mon_sys XDG_RUNTIME_DIR="/run/user/$(id -u CI10742292-lnx
 sudo systemctl start grafana-server
 sudo systemctl enable grafana-server
 ```
+
+## Временные опции для отладки
+
+### Отключить настройку прав Prometheus
+Если Prometheus перестал работать после обновления скрипта:
+```bash
+export SKIP_PROMETHEUS_PERMISSIONS_ADJUST=true
+sudo ./deploy_monitoring_script.sh
+```
+
+### Отключить очистку данных Grafana
+Если нужно сохранить существующую базу данных Grafana:
+```bash
+export SKIP_GRAFANA_DATA_CLEANUP=true
+sudo ./deploy_monitoring_script.sh
+```
+
+### Использовать оба варианта
+```bash
+export SKIP_PROMETHEUS_PERMISSIONS_ADJUST=true
+export SKIP_GRAFANA_DATA_CLEANUP=true
+sudo ./deploy_monitoring_script.sh
+```
+
+## Восстановление работы Prometheus
+Если Prometheus перестал работать:
+
+1. Проверьте статус:
+```bash
+sudo -u CI10742292-lnx-mon_sys XDG_RUNTIME_DIR="/run/user/$(id -u CI10742292-lnx-mon_sys)" systemctl --user status monitoring-prometheus.service
+```
+
+2. Восстановите оригинальные права:
+```bash
+# Сертификаты
+sudo chown -R prometheus:prometheus /etc/prometheus/cert
+sudo chmod 640 /etc/prometheus/cert/server.crt
+sudo chmod 600 /etc/prometheus/cert/server.key
+
+# Конфиги
+sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml /etc/prometheus/web-config.yml /etc/prometheus/prometheus.env
+sudo chmod 640 /etc/prometheus/prometheus.yml /etc/prometheus/web-config.yml /etc/prometheus/prometheus.env
+
+# Данные
+sudo chown -R prometheus:prometheus /var/lib/prometheus
+sudo chmod 750 /var/lib/prometheus
+```
+
+3. Перезапустите Prometheus:
+```bash
+sudo -u CI10742292-lnx-mon_sys XDG_RUNTIME_DIR="/run/user/$(id -u CI10742292-lnx-mon_sys)" systemctl --user restart monitoring-prometheus.service
+```

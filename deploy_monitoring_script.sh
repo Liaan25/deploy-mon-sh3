@@ -1698,6 +1698,7 @@ adjust_grafana_permissions_for_mon_sys() {
     local grafana_log_dir="/var/log/grafana"
     local grafana_cert_dir="/etc/grafana/cert"
     local grafana_config="/etc/grafana/grafana.ini"
+    local grafana_provisioning_dir="/etc/grafana/provisioning"
 
     # Директория с данными Grafana
     if [[ -d "$grafana_data_dir" ]]; then
@@ -1744,6 +1745,18 @@ adjust_grafana_permissions_for_mon_sys() {
         print_info "Настройка владельца/прав конфига Grafana для ${mon_sys_user}"
         chown "${mon_sys_user}:grafana" "$grafana_config" 2>/dev/null || print_warning "Не удалось изменить владельца $grafana_config"
         chmod 640 "$grafana_config" 2>/dev/null || true
+    fi
+
+    # Директория provisioning Grafana
+    if [[ -d "$grafana_provisioning_dir" ]]; then
+        print_info "Настройка владельца/прав provisioning директории Grafana для ${mon_sys_user}"
+        chown -R "${mon_sys_user}:grafana" "$grafana_provisioning_dir" 2>/dev/null || print_warning "Не удалось изменить владельца $grafana_provisioning_dir"
+        chmod 750 "$grafana_provisioning_dir" 2>/dev/null || true
+        # Рекурсивно устанавливаем права на чтение для файлов в provisioning
+        find "$grafana_provisioning_dir" -type f -exec chmod 640 {} \; 2>/dev/null || true
+        find "$grafana_provisioning_dir" -type d -exec chmod 750 {} \; 2>/dev/null || true
+    else
+        print_warning "Каталог provisioning Grafana ($grafana_provisioning_dir) не найден"
     fi
 
     print_success "Права Grafana адаптированы для запуска под ${mon_sys_user} (user-юнит)"
@@ -1799,6 +1812,76 @@ configure_grafana_datasource() {
             return 1
         fi
     fi
+}
+
+# Проверка доступности Grafana
+check_grafana_availability() {
+    print_step "Проверка доступности Grafana"
+    ensure_working_directory
+    
+    local grafana_url="https://${SERVER_DOMAIN}:${GRAFANA_PORT}"
+    local max_attempts=30
+    local attempt=1
+    local interval_sec=2
+    
+    print_info "Ожидание запуска Grafana (максимум $((max_attempts * interval_sec)) секунд)..."
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        # Проверяем, активен ли user-юнит Grafana
+        if [[ -n "${KAE:-}" ]]; then
+            local mon_sys_user="${KAE}-lnx-mon_sys"
+            local mon_sys_uid=""
+            if id "$mon_sys_user" >/dev/null 2>&1; then
+                mon_sys_uid=$(id -u "$mon_sys_user")
+                local ru_cmd="runuser -u ${mon_sys_user} --"
+                local xdg_env="XDG_RUNTIME_DIR=/run/user/${mon_sys_uid}"
+                
+                if $ru_cmd env "$xdg_env" systemctl --user is-active --quiet monitoring-grafana.service 2>/dev/null; then
+                    print_success "Grafana user-юнит активен"
+                    
+                    # Дополнительная проверка HTTP-ответа
+                    if "$WRAPPERS_DIR/grafana_launcher.sh" http_check "$grafana_url" "https"; then
+                        print_success "Grafana отвечает на HTTPS запросы"
+                        return 0
+                    elif "$WRAPPERS_DIR/grafana_launcher.sh" http_check "http://${SERVER_DOMAIN}:${GRAFANA_PORT}" "http"; then
+                        print_success "Grafana отвечает на HTTP запросы"
+                        return 0
+                    else
+                        print_info "Grafana юнит активен, но HTTP/HTTPS не отвечает (попытка $attempt/$max_attempts)"
+                    fi
+                fi
+            fi
+        fi
+        
+        # Также проверяем системный юнит на случай fallback
+        if systemctl is-active --quiet grafana-server 2>/dev/null; then
+            print_success "Grafana системный юнит активен"
+            
+            # Дополнительная проверка HTTP-ответа
+            if "$WRAPPERS_DIR/grafana_launcher.sh" http_check "$grafana_url" "https"; then
+                print_success "Grafana отвечает на HTTPS запросы"
+                return 0
+            elif "$WRAPPERS_DIR/grafana_launcher.sh" http_check "http://${SERVER_DOMAIN}:${GRAFANA_PORT}" "http"; then
+                print_success "Grafana отвечает на HTTP запросы"
+                return 0
+            else
+                print_info "Grafana системный юнит активен, но HTTP/HTTPS не отвечает (попытка $attempt/$max_attempts)"
+            fi
+        fi
+        
+        printf "\r[INFO] Ожидание Grafana... (попытка %d/%d)" "$attempt" "$max_attempts"
+        sleep "$interval_sec"
+        attempt=$((attempt + 1))
+    done
+    
+    echo
+    print_error "Grafana не доступна после $((max_attempts * interval_sec)) секунд ожидания"
+    print_info "Проверьте статус:"
+    print_info "  sudo -u CI10742292-lnx-mon_sys XDG_RUNTIME_DIR=\"/run/user/\$(id -u CI10742292-lnx-mon_sys)\" systemctl --user status monitoring-grafana.service"
+    print_info "  sudo systemctl status grafana-server"
+    print_info "Проверьте логи: /tmp/grafana-debug.log"
+    
+    return 1
 }
 
 ensure_grafana_token() {
@@ -2338,9 +2421,17 @@ main() {
     configure_iptables
     setup_monitoring_user_units
     configure_services
-    ensure_grafana_token
-    configure_grafana_datasource
-    import_grafana_dashboards
+    
+    # Проверяем, что Grafana работает перед попыткой получения токена
+    if ! check_grafana_availability; then
+        print_error "Grafana не доступна. Пропускаем получение токена и настройку datasource."
+        print_info "Проверьте логи Grafana: /tmp/grafana-debug.log"
+        print_info "Запустите скрипт отладки: sudo ./debug_grafana.sh"
+    else
+        ensure_grafana_token
+        configure_grafana_datasource
+        import_grafana_dashboards
+    fi
 
     # Явная очистка чувствительных переменных окружения после операций с RLM и Grafana
     unset RLM_TOKEN GRAFANA_USER GRAFANA_PASSWORD GRAFANA_BEARER_TOKEN || true

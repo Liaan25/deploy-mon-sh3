@@ -2345,11 +2345,6 @@ setup_grafana_datasource_and_dashboards() {
             fi
         }
         
-        log_diagnosis "=== РЕЗУЛЬТАТ create_service_account_via_api ==="
-        log_diagnosis "Код возврата: $sa_result"
-        log_diagnosis "SA ID: '$sa_id'"
-        log_diagnosis "=== КОНЕЦ create_service_account_via_api ==="
-        
         # Функция для создания токена через API
         create_token_via_api() {
             local sa_id="$1"

@@ -1839,15 +1839,12 @@ check_grafana_availability() {
                 if $ru_cmd env "$xdg_env" systemctl --user is-active --quiet monitoring-grafana.service 2>/dev/null; then
                     print_success "Grafana user-юнит активен"
                     
-                    # Дополнительная проверка HTTP-ответа
-                    if "$WRAPPERS_DIR/grafana_launcher.sh" http_check "$grafana_url" "https"; then
-                        print_success "Grafana отвечает на HTTPS запросы"
-                        return 0
-                    elif "$WRAPPERS_DIR/grafana_launcher.sh" http_check "http://${SERVER_DOMAIN}:${GRAFANA_PORT}" "http"; then
-                        print_success "Grafana отвечает на HTTP запросы"
+                    # Проверяем что процесс слушает порт
+                    if ss -tln | grep -q ":${GRAFANA_PORT} "; then
+                        print_success "Grafana слушает порт ${GRAFANA_PORT}"
                         return 0
                     else
-                        print_info "Grafana юнит активен, но HTTP/HTTPS не отвечает (попытка $attempt/$max_attempts)"
+                        print_info "Grafana юнит активен, но порт ${GRAFANA_PORT} не слушается (попытка $attempt/$max_attempts)"
                     fi
                 fi
             fi
@@ -1857,15 +1854,12 @@ check_grafana_availability() {
         if systemctl is-active --quiet grafana-server 2>/dev/null; then
             print_success "Grafana системный юнит активен"
             
-            # Дополнительная проверка HTTP-ответа
-            if "$WRAPPERS_DIR/grafana_launcher.sh" http_check "$grafana_url" "https"; then
-                print_success "Grafana отвечает на HTTPS запросы"
-                return 0
-            elif "$WRAPPERS_DIR/grafana_launcher.sh" http_check "http://${SERVER_DOMAIN}:${GRAFANA_PORT}" "http"; then
-                print_success "Grafana отвечает на HTTP запросы"
+            # Проверяем что процесс слушает порт
+            if ss -tln | grep -q ":${GRAFANA_PORT} "; then
+                print_success "Grafana слушает порт ${GRAFANA_PORT}"
                 return 0
             else
-                print_info "Grafana системный юнит активен, но HTTP/HTTPS не отвечает (попытка $attempt/$max_attempts)"
+                print_info "Grafana системный юнит активен, но порт ${GRAFANA_PORT} не слушается (попытка $attempt/$max_attempts)"
             fi
         fi
         
@@ -1973,6 +1967,233 @@ ensure_grafana_token() {
     GRAFANA_BEARER_TOKEN="$token_value"
     export GRAFANA_BEARER_TOKEN
     print_success "Получен токен Grafana"
+}
+
+# Настройка Prometheus datasource и импорт дашбордов Harvest
+setup_grafana_datasource_and_dashboards() {
+    print_step "Настройка Prometheus datasource и дашбордов в Grafana"
+    ensure_working_directory
+    
+    local grafana_url="https://${SERVER_DOMAIN}:${GRAFANA_PORT}"
+    
+    # Проверяем доступность Grafana
+    print_info "Проверка доступности Grafana..."
+    if ! curl -k -s "${grafana_url}/api/health" | grep -q '"database":"ok"'; then
+        print_error "Grafana не доступна"
+        print_info "Попробуйте HTTP:"
+        curl -s "http://${SERVER_DOMAIN}:${GRAFANA_PORT}/api/health" || true
+        return 1
+    fi
+    print_success "Grafana доступна"
+    
+    # Получаем учетные данные
+    print_info "Получение учетных данных Grafana из Vault..."
+    local cred_json="/opt/vault/conf/data_sec.json"
+    if [[ ! -f "$cred_json" ]]; then
+        print_error "Файл с учетными данными не найден: $cred_json"
+        return 1
+    fi
+    
+    local grafana_user grafana_password
+    grafana_user=$(jq -r '.grafana_web.user // empty' "$cred_json" 2>/dev/null || echo "")
+    grafana_password=$(jq -r '.grafana_web.pass // empty' "$cred_json" 2>/dev/null || echo "")
+    
+    if [[ -z "$grafana_user" || -z "$grafana_password" ]]; then
+        print_error "Не удалось получить учетные данные Grafana"
+        return 1
+    fi
+    print_success "Учетные данные получены"
+    
+    # Создаем сервисный аккаунт
+    print_info "Создание сервисного аккаунта..."
+    local timestamp service_account_name token_name
+    timestamp=$(date +%s)
+    service_account_name="harvest-service-account_$timestamp"
+    token_name="harvest-token_$timestamp"
+    
+    # Создаем сервисный аккаунт через API
+    local sa_payload sa_response http_code sa_body sa_id
+    sa_payload=$(jq -n --arg name "$service_account_name" --arg role "Admin" '{name:$name, role:$role}')
+    
+    sa_response=$(curl -k -s -w "\n%{http_code}" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -u "${grafana_user}:${grafana_password}" \
+        -d "$sa_payload" \
+        "${grafana_url}/api/serviceaccounts")
+    
+    http_code=$(echo "$sa_response" | tail -1)
+    sa_body=$(echo "$sa_response" | head -n -1)
+    
+    if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+        sa_id=$(echo "$sa_body" | jq -r '.id // empty')
+        print_success "Сервисный аккаунт создан, ID: $sa_id"
+    elif [[ "$http_code" == "409" ]]; then
+        # Сервисный аккаунт уже существует
+        print_info "Сервисный аккаунт уже существует, получаем ID..."
+        local list_response list_code list_body
+        list_response=$(curl -k -s -w "\n%{http_code}" \
+            -u "${grafana_user}:${grafana_password}" \
+            "${grafana_url}/api/serviceaccounts?query=${service_account_name}")
+        
+        list_code=$(echo "$list_response" | tail -1)
+        list_body=$(echo "$list_response" | head -n -1)
+        
+        if [[ "$list_code" == "200" ]]; then
+            sa_id=$(echo "$list_body" | jq -r '.serviceAccounts[] | select(.name=="'"$service_account_name"'") | .id' | head -1)
+            print_success "Найден существующий сервисный аккаунт, ID: $sa_id"
+        else
+            print_error "Не удалось получить список сервисных аккаунтов"
+            return 1
+        fi
+    else
+        print_error "Ошибка создания сервисного аккаунта: HTTP $http_code"
+        return 1
+    fi
+    
+    # Создаем токен
+    print_info "Создание токена сервисного аккаунта..."
+    local token_payload token_response token_code token_body bearer_token
+    token_payload=$(jq -n --arg name "$token_name" '{name:$name}')
+    
+    token_response=$(curl -k -s -w "\n%{http_code}" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -u "${grafana_user}:${grafana_password}" \
+        -d "$token_payload" \
+        "${grafana_url}/api/serviceaccounts/${sa_id}/tokens")
+    
+    token_code=$(echo "$token_response" | tail -1)
+    token_body=$(echo "$token_response" | head -n -1)
+    
+    if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
+        bearer_token=$(echo "$token_body" | jq -r '.key // empty')
+        if [[ -n "$bearer_token" ]]; then
+            GRAFANA_BEARER_TOKEN="$bearer_token"
+            export GRAFANA_BEARER_TOKEN
+            print_success "Токен создан"
+        else
+            print_error "Пустой токен в ответе"
+            return 1
+        fi
+    else
+        print_error "Ошибка создания токена: HTTP $token_code"
+        return 1
+    fi
+    
+    # Настраиваем Prometheus datasource
+    print_info "Настройка Prometheus datasource..."
+    
+    # Подготавливаем сертификаты для mTLS
+    local tls_client_cert tls_client_key tls_ca_cert
+    tls_client_cert=$(cat /opt/vault/certs/grafana-client.crt 2>/dev/null | jq -R -s . || echo '""')
+    tls_client_key=$(cat /opt/vault/certs/grafana-client.key 2>/dev/null | jq -R -s . || echo '""')
+    tls_ca_cert=$(cat /etc/prometheus/cert/ca_chain.crt 2>/dev/null | jq -R -s . || echo '""')
+    
+    # Создаем payload для datasource
+    local ds_payload
+    ds_payload=$(jq -n \
+        --arg url "https://${SERVER_DOMAIN}:${PROMETHEUS_PORT}" \
+        --arg sn "${SERVER_DOMAIN}" \
+        --argjson tlsClientCert "$tls_client_cert" \
+        --argjson tlsClientKey "$tls_client_key" \
+        --argjson tlsCACert "$tls_ca_cert" \
+        '{
+            name: "prometheus",
+            type: "prometheus",
+            access: "proxy",
+            url: $url,
+            isDefault: true,
+            jsonData: {
+                httpMethod: "POST",
+                serverName: $sn,
+                tlsAuth: true,
+                tlsAuthWithCACert: true,
+                tlsSkipVerify: false
+            },
+            secureJsonData: {
+                tlsClientCert: $tlsClientCert,
+                tlsClientKey: $tlsClientKey,
+                tlsCACert: $tlsCACert
+            }
+        }')
+    
+    # Проверяем существующий datasource
+    local ds_response ds_code ds_body ds_id
+    ds_response=$(curl -k -s -w "\n%{http_code}" \
+        -H "Authorization: Bearer $bearer_token" \
+        "${grafana_url}/api/datasources/name/prometheus")
+    
+    ds_code=$(echo "$ds_response" | tail -1)
+    ds_body=$(echo "$ds_response" | head -n -1)
+    
+    if [[ "$ds_code" == "200" ]]; then
+        # Datasource существует, обновляем
+        ds_id=$(echo "$ds_body" | jq -r '.id')
+        print_info "Datasource существует, ID: $ds_id, обновляем..."
+        
+        local update_response update_code
+        update_response=$(curl -k -s -w "\n%{http_code}" \
+            -X PUT \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $bearer_token" \
+            -d "$ds_payload" \
+            "${grafana_url}/api/datasources/${ds_id}")
+        
+        update_code=$(echo "$update_response" | tail -1)
+        if [[ "$update_code" == "200" || "$update_code" == "202" ]]; then
+            print_success "Datasource обновлен"
+        else
+            print_warning "Не удалось обновить datasource: HTTP $update_code"
+        fi
+    else
+        # Datasource не существует, создаем
+        print_info "Создание нового datasource..."
+        
+        local create_response create_code
+        create_response=$(curl -k -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $bearer_token" \
+            -d "$ds_payload" \
+            "${grafana_url}/api/datasources")
+        
+        create_code=$(echo "$create_response" | tail -1)
+        if [[ "$create_code" == "200" || "$create_code" == "202" ]]; then
+            print_success "Datasource создан"
+        else
+            print_warning "Не удалось создать datasource: HTTP $create_code"
+        fi
+    fi
+    
+    # Импортируем дашборды Harvest
+    print_info "Импорт дашбордов Harvest..."
+    
+    if [[ ! -d "/opt/harvest" ]]; then
+        print_error "Директория /opt/harvest не найдена"
+        return 1
+    fi
+    
+    cd /opt/harvest || {
+        print_error "Не удалось перейти в /opt/harvest"
+        return 1
+    }
+    
+    if [[ ! -f "./harvest.yml" ]]; then
+        print_error "Файл конфигурации harvest.yml не найден"
+        return 1
+    fi
+    
+    if echo "Y" | ./bin/harvest --config ./harvest.yml grafana import --addr "$grafana_url" --token "$bearer_token" --insecure 2>&1; then
+        print_success "Дашборды импортированы"
+    else
+        print_warning "Не удалось импортировать дашборды автоматически"
+        print_info "Попробуйте вручную:"
+        print_info "cd /opt/harvest && echo 'Y' | ./bin/harvest --config ./harvest.yml grafana import --addr $grafana_url --token <TOKEN> --insecure"
+    fi
+    
+    print_success "Настройка Grafana завершена"
+    return 0
 }
 
 configure_iptables() {
@@ -2288,22 +2509,61 @@ import_grafana_dashboards() {
     print_success "Процесс импорта дашбордов завершен"
 }
 
+# Функция проверки системных сервисов (fallback)
+check_system_services() {
+    local services=("prometheus" "grafana-server")
+    local failed_services_ref="$1"
+    
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            print_success "$service (system): активен"
+        else
+            print_error "$service (system): не активен"
+            eval "$failed_services_ref+=(\"$service\")"
+        fi
+    done
+}
+
 verify_installation() {
     print_step "Проверка установки и доступности сервисов"
     ensure_working_directory
     echo
     print_info "Проверка статуса сервисов:"
-    local services=("prometheus" "grafana-server")
     local failed_services=()
 
-    for service in "${services[@]}"; do
-        if systemctl is-active --quiet "$service"; then
-            print_success "$service: активен"
+    # Проверяем user-юниты если используется mon_sys пользователь
+    if [[ -n "${KAE:-}" ]]; then
+        local mon_sys_user="${KAE}-lnx-mon_sys"
+        local mon_sys_uid=""
+        
+        if id "$mon_sys_user" >/dev/null 2>&1; then
+            mon_sys_uid=$(id -u "$mon_sys_user")
+            local ru_cmd="runuser -u ${mon_sys_user} --"
+            local xdg_env="XDG_RUNTIME_DIR=/run/user/${mon_sys_uid}"
+            
+            # Проверяем Prometheus user-юнит
+            if $ru_cmd env "$xdg_env" systemctl --user is-active --quiet monitoring-prometheus.service 2>/dev/null; then
+                print_success "monitoring-prometheus.service (user): активен"
+            else
+                print_error "monitoring-prometheus.service (user): не активен"
+                failed_services+=("monitoring-prometheus.service")
+            fi
+            
+            # Проверяем Grafana user-юнит
+            if $ru_cmd env "$xdg_env" systemctl --user is-active --quiet monitoring-grafana.service 2>/dev/null; then
+                print_success "monitoring-grafana.service (user): активен"
+            else
+                print_error "monitoring-grafana.service (user): не активен"
+                failed_services+=("monitoring-grafana.service")
+            fi
         else
-            print_error "$service: не активен"
-            failed_services+=("$service")
+            print_warning "Пользователь ${mon_sys_user} не найден, проверяем системные юниты"
+            check_system_services "failed_services"
         fi
-    done
+    else
+        print_warning "KAE не определён, проверяем системные юниты"
+        check_system_services "failed_services"
+    fi
 
     if command -v harvest &> /dev/null; then
         if harvest status --config "$HARVEST_CONFIG" 2>/dev/null | grep -q "running"; then
@@ -2422,15 +2682,13 @@ main() {
     setup_monitoring_user_units
     configure_services
     
-    # Проверяем, что Grafana работает перед попыткой получения токена
+    # Настраиваем Grafana datasource и дашборды
     if ! check_grafana_availability; then
-        print_error "Grafana не доступна. Пропускаем получение токена и настройку datasource."
+        print_error "Grafana не доступна. Пропускаем настройку datasource и дашбордов."
         print_info "Проверьте логи Grafana: /tmp/grafana-debug.log"
         print_info "Запустите скрипт отладки: sudo ./debug_grafana.sh"
     else
-        ensure_grafana_token
-        configure_grafana_datasource
-        import_grafana_dashboards
+        setup_grafana_datasource_and_dashboards
     fi
 
     # Явная очистка чувствительных переменных окружения после операций с RLM и Grafana

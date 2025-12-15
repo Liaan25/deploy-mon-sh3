@@ -122,3 +122,4 @@ echo "  sudo bash -c 'source deploy_monitoring_script.sh; setup_grafana_datasour
 echo
 echo "Для проверки конкретных исправлений:"
 echo "  ./test_grafana_fixes.sh"
+echo "  ./test_detailed_grafana_fixes.sh"

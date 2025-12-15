@@ -1976,17 +1976,36 @@ setup_grafana_datasource_and_dashboards() {
     
     local grafana_url="https://${SERVER_DOMAIN}:${GRAFANA_PORT}"
     
+    # Диагностическая информация
+    print_info "=== ДИАГНОСТИКА GRAFANA ==="
+    print_info "Grafana URL: $grafana_url"
+    print_info "GRAFANA_PORT: ${GRAFANA_PORT}"
+    print_info "SERVER_DOMAIN: ${SERVER_DOMAIN}"
+    print_info "Текущий токен установлен: $( [[ -n "$GRAFANA_BEARER_TOKEN" ]] && echo "ДА" || echo "НЕТ" )"
+    
     # Проверяем доступность Grafana - просто проверяем что порт слушается
     # Не делаем HTTP/HTTPS запросы, так как Grafana может требовать клиентские сертификаты
     print_info "Проверка доступности Grafana (порт ${GRAFANA_PORT})..."
+    
+    # Детальная диагностика порта
+    print_info "Проверка порта ${GRAFANA_PORT} с помощью ss:"
+    ss -tln | grep ":${GRAFANA_PORT}" || true
+    
     if ! ss -tln | grep -q ":${GRAFANA_PORT} "; then
         print_error "Grafana не слушает порт ${GRAFANA_PORT}"
+        print_info "Текущие слушающие порты:"
+        ss -tln | head -20
         return 1
     fi
     
     # Дополнительная проверка - процесс Grafana запущен
+    print_info "Проверка процесса grafana-server..."
+    pgrep -f "grafana-server" && print_info "Процесс grafana-server найден" || print_info "Процесс grafana-server не найден"
+    
     if ! pgrep -f "grafana-server" >/dev/null 2>&1; then
         print_error "Процесс grafana-server не найден"
+        print_info "Текущие процессы:"
+        ps aux | grep -i grafana | head -10
         return 1
     fi
     
@@ -1995,8 +2014,18 @@ setup_grafana_datasource_and_dashboards() {
     # Получаем учетные данные
     print_info "Получение учетных данных Grafana из Vault..."
     local cred_json="/opt/vault/conf/data_sec.json"
-    if [[ ! -f "$cred_json" ]]; then
+    
+    # Диагностика файла с учетными данными
+    print_info "Проверка файла с учетными данными: $cred_json"
+    if [[ -f "$cred_json" ]]; then
+        print_info "Файл существует, размер: $(stat -c%s "$cred_json" 2>/dev/null || echo "неизвестно") байт"
+        print_info "Содержимое файла (первые 200 символов):"
+        head -c 200 "$cred_json" 2>/dev/null | cat -A || true
+        echo
+    else
         print_error "Файл с учетными данными не найден: $cred_json"
+        print_info "Поиск альтернативных файлов..."
+        find /opt/vault -name "*data*sec*" -type f 2>/dev/null | head -5
         return 1
     fi
     
@@ -2004,8 +2033,14 @@ setup_grafana_datasource_and_dashboards() {
     grafana_user=$(jq -r '.grafana_web.user // empty' "$cred_json" 2>/dev/null || echo "")
     grafana_password=$(jq -r '.grafana_web.pass // empty' "$cred_json" 2>/dev/null || echo "")
     
+    print_info "Полученные учетные данные:"
+    print_info "  Пользователь: $( [[ -n "$grafana_user" ]] && echo "установлен" || echo "НЕ УСТАНОВЛЕН" )"
+    print_info "  Пароль: $( [[ -n "$grafana_password" ]] && echo "установлен" || echo "НЕ УСТАНОВЛЕН" )"
+    
     if [[ -z "$grafana_user" || -z "$grafana_password" ]]; then
         print_error "Не удалось получить учетные данные Grafana"
+        print_info "Содержимое JSON (структура):"
+        jq '.' "$cred_json" 2>/dev/null | head -20 || cat "$cred_json" | head -20
         return 1
     fi
     print_success "Учетные данные получены"
@@ -2047,15 +2082,25 @@ setup_grafana_datasource_and_dashboards() {
                     \"${grafana_url}/api/serviceaccounts\""
             fi
             
-            sa_response=$(eval "$curl_cmd")
+            print_info "Выполнение API запроса для создания сервисного аккаунта..."
+            sa_response=$(eval "$curl_cmd" 2>&1)
             http_code=$(echo "$sa_response" | tail -1)
             sa_body=$(echo "$sa_response" | head -n -1)
             
+            # Логируем ответ для диагностики
+            print_info "Ответ API создания сервисного аккаунта: HTTP $http_code"
+            
             if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
                 sa_id=$(echo "$sa_body" | jq -r '.id // empty')
-                print_success "Сервисный аккаунт создан через API, ID: $sa_id"
-                echo "$sa_id"
-                return 0
+                if [[ -n "$sa_id" && "$sa_id" != "null" ]]; then
+                    print_success "Сервисный аккаунт создан через API, ID: $sa_id"
+                    echo "$sa_id"
+                    return 0
+                else
+                    print_warning "Сервисный аккаунт создан, но ID не получен"
+                    echo ""
+                    return 2  # Специальный код для "частичного успеха"
+                fi
             elif [[ "$http_code" == "409" ]]; then
                 # Сервисный аккаунт уже существует
                 print_info "Сервисный аккаунт уже существует, получаем ID..."
@@ -2072,22 +2117,32 @@ setup_grafana_datasource_and_dashboards() {
                         \"${grafana_url}/api/serviceaccounts?query=${service_account_name}\""
                 fi
                 
-                list_response=$(eval "$list_cmd")
+                list_response=$(eval "$list_cmd" 2>&1)
                 list_code=$(echo "$list_response" | tail -1)
                 list_body=$(echo "$list_response" | head -n -1)
                 
+                print_info "Ответ API получения списка сервисных аккаунтов: HTTP $list_code"
+                
                 if [[ "$list_code" == "200" ]]; then
                     sa_id=$(echo "$list_body" | jq -r '.serviceAccounts[] | select(.name=="'"$service_account_name"'") | .id' | head -1)
-                    print_success "Найден существующий сервисный аккаунт, ID: $sa_id"
-                    echo "$sa_id"
-                    return 0
+                    if [[ -n "$sa_id" && "$sa_id" != "null" ]]; then
+                        print_success "Найден существующий сервисный аккаунт, ID: $sa_id"
+                        echo "$sa_id"
+                        return 0
+                    else
+                        print_warning "Сервисный аккаунт найден в списке, но ID не получен"
+                        echo ""
+                        return 2
+                    fi
                 else
-                    print_error "Не удалось получить список сервисных аккаунтов через API"
-                    return 1
+                    print_warning "Не удалось получить список сервисных аккаунтов через API (HTTP $list_code)"
+                    echo ""
+                    return 2
                 fi
             else
-                print_warning "API запрос не удался (HTTP $http_code). Пробуем альтернативный метод..."
-                return 1
+                print_warning "API запрос создания сервисного аккаунта не удался (HTTP $http_code)"
+                echo ""
+                return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
             fi
         }
         
@@ -2116,33 +2171,38 @@ setup_grafana_datasource_and_dashboards() {
                     \"${grafana_url}/api/serviceaccounts/${sa_id}/tokens\""
             fi
             
-            token_response=$(eval "$curl_cmd")
+            print_info "Выполнение API запроса для создания токена сервисного аккаунта..."
+            token_response=$(eval "$curl_cmd" 2>&1)
             token_code=$(echo "$token_response" | tail -1)
             token_body=$(echo "$token_response" | head -n -1)
             
+            # Логируем ответ для диагностики
+            print_info "Ответ API создания токена: HTTP $token_code"
+            
             if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
                 bearer_token=$(echo "$token_body" | jq -r '.key // empty')
-                if [[ -n "$bearer_token" ]]; then
+                if [[ -n "$bearer_token" && "$bearer_token" != "null" ]]; then
                     GRAFANA_BEARER_TOKEN="$bearer_token"
                     export GRAFANA_BEARER_TOKEN
                     print_success "Токен создан через API"
                     return 0
                 else
-                    print_error "Пустой токен в ответе API"
-                    return 1
+                    print_warning "Токен создан, но значение пустое"
+                    return 2  # Специальный код для "частичного успеха"
                 fi
             else
                 print_warning "Создание токена через API не удалось (HTTP $token_code)"
-                return 1
+                return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
             fi
         }
         
         # Пробуем получить токен через API
         local sa_id
         sa_id=$(create_service_account_via_api)
+        local sa_result=$?
         
-        if [[ $? -eq 0 && -n "$sa_id" ]]; then
-            # Пробуем создать токен через API
+        if [[ $sa_result -eq 0 && -n "$sa_id" ]]; then
+            # Успешно создали сервисный аккаунт, пробуем создать токен
             if ! create_token_via_api "$sa_id"; then
                 print_warning "Не удалось создать токен через API. Пробуем использовать обертку..."
                 # Fallback на использование обертки
@@ -2151,7 +2211,7 @@ setup_grafana_datasource_and_dashboards() {
                     if "$WRAPPERS_DIR/grafana_wrapper.sh" get-token "$grafana_user" "$grafana_password"; then
                         print_success "Токен получен через обертку"
                     else
-                        print_error "Не удалось получить токен ни через API, ни через обертку"
+                        print_warning "Не удалось получить токен ни через API, ни через обертку"
                         print_info "Пропускаем настройку datasource и дашбордов"
                         return 0  # Возвращаем успех, но пропускаем настройку
                     fi
@@ -2161,8 +2221,26 @@ setup_grafana_datasource_and_dashboards() {
                     return 0  # Возвращаем успех, но пропускаем настройку
                 fi
             fi
+        elif [[ $sa_result -eq 2 ]]; then
+            # Частичный успех или временная ошибка API
+            print_warning "Проблемы с API Grafana (код $sa_result). Пробуем использовать обертку..."
+            if [[ -x "$WRAPPERS_DIR/grafana_wrapper.sh" ]]; then
+                print_info "Используем grafana_wrapper.sh для получения токена..."
+                if "$WRAPPERS_DIR/grafana_wrapper.sh" get-token "$grafana_user" "$grafana_password"; then
+                    print_success "Токен получен через обертку"
+                else
+                    print_warning "Не удалось получить токен через обертку"
+                    print_info "Пропускаем настройку datasource и дашбордов"
+                    return 0  # Возвращаем успех, но пропускаем настройку
+                fi
+            else
+                print_warning "Обертка grafana_wrapper.sh не найдена. Пропускаем настройку токена."
+                print_info "Datasource и дашборды могут быть настроены вручную через UI Grafana"
+                return 0  # Возвращаем успех, но пропускаем настройку
+            fi
         else
-            print_warning "Не удалось создать сервисный аккаунт через API. Пропускаем настройку токена."
+            # Другие ошибки (например, код 1)
+            print_warning "Не удалось создать сервисный аккаунт через API (код $sa_result). Пропускаем настройку токена."
             print_info "Datasource и дашборды могут быть настроены вручную через UI Grafana"
             return 0  # Возвращаем успех, но пропускаем настройку
         fi

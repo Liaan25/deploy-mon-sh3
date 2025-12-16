@@ -2161,7 +2161,7 @@ setup_grafana_datasource_and_dashboards() {
         service_account_name="harvest-service-account_$timestamp"
         token_name="harvest-token_$timestamp"
         
-        # Функция для создания сервисного аккаунта через API
+        # Функция для создания сервисного аккаунта через API (исправленная версия)
         create_service_account_via_api() {
             # Проверяем, нужно ли использовать localhost вместо доменного имени
             local original_grafana_url="$grafana_url"

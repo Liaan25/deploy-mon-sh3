@@ -2235,17 +2235,17 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "✅ Health check прошел успешно"
             fi
             
-            # Пробуем с клиентскими сертификатами если они есть
-            local curl_cmd="curl -k -s -w \"\n%{http_code}\" \
+            # Вариант 3: Сначала пробуем без сертификатов, потом с ними
+            local curl_cmd_without_cert="curl -k -s -w \"\n%{http_code}\" \
                 -X POST \
                 -H \"Content-Type: application/json\" \
                 -u \"${grafana_user}:${grafana_password}\" \
                 -d \"$sa_payload\" \
                 \"${grafana_url}/api/serviceaccounts\""
             
-            # Добавляем клиентские сертификаты если они существуют
+            local curl_cmd_with_cert=""
             if [[ -f "/opt/vault/certs/grafana-client.crt" && -f "/opt/vault/certs/grafana-client.key" ]]; then
-                curl_cmd="curl -k -s -w \"\n%{http_code}\" \
+                curl_cmd_with_cert="curl -k -s -w \"\n%{http_code}\" \
                     --cert \"/opt/vault/certs/grafana-client.crt\" \
                     --key \"/opt/vault/certs/grafana-client.key\" \
                     -X POST \
@@ -2253,90 +2253,144 @@ setup_grafana_datasource_and_dashboards() {
                     -u \"${grafana_user}:${grafana_password}\" \
                     -d \"$sa_payload\" \
                     \"${grafana_url}/api/serviceaccounts\""
-                print_info "Используем клиентские сертификаты для mTLS"
-                log_diagnosis "Используем клиентские сертификаты для mTLS"
-                log_diagnosis "Сертификат: /opt/vault/certs/grafana-client.crt (размер: $(stat -c%s "/opt/vault/certs/grafana-client.crt" 2>/dev/null || echo "не найден"))"
-                log_diagnosis "Ключ: /opt/vault/certs/grafana-client.key (размер: $(stat -c%s "/opt/vault/certs/grafana-client.key" 2>/dev/null || echo "не найден"))"
-            else
-                print_info "Клиентские сертификаты не найдены, используем базовую аутентификацию"
-                log_diagnosis "Клиентские сертификаты не найдены, используем базовую аутентификацию"
             fi
             
-            # Логируем команду (без пароля)
-            local safe_curl_cmd=$(echo "$curl_cmd" | sed "s/-u \"${grafana_user}:${grafana_password}\"/-u \"${grafana_user}:*****\"/")
-            print_info "Выполнение API запроса: $safe_curl_cmd"
-            print_info "Payload: $sa_payload"
+            # Сначала пробуем без сертификатов
+            local curl_cmd="$curl_cmd_without_cert"
+            print_info "Пробуем создать сервисный аккаунт БЕЗ клиентских сертификатов"
+            log_diagnosis "Пробуем создать сервисный аккаунт БЕЗ клиентских сертификатов"
             
-            log_diagnosis "CURL команда (без пароля): $safe_curl_cmd"
-            log_diagnosis "Полная CURL команда: $(echo "$curl_cmd" | sed "s/${grafana_password}/*****/g")"
-            log_diagnosis "Payload: $sa_payload"
-            log_diagnosis "Endpoint: ${grafana_url}/api/serviceaccounts"
-            log_diagnosis "Время начала запроса: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
-            
-            echo "DEBUG_SA_CREATE: Начало создания сервисного аккаунта" >&2
-            echo "DEBUG_SA_ENDPOINT: Endpoint: ${grafana_url}/api/serviceaccounts" >&2
-            echo "DEBUG_SA_PAYLOAD: Payload: $sa_payload" >&2
-            echo "DEBUG_CURL_CMD: Команда curl (без пароля): $(echo "$curl_cmd" | sed "s/${grafana_password}/*****/g")" >&2
-            
-            print_info "Выполнение curl команды для создания сервисного аккаунта..."
-            log_diagnosis "Начало выполнения curl команды..."
-            
-            local curl_start_time=$(date +%s.%3N)
-            if ! sa_response=$(eval "$curl_cmd" 2>&1); then
+            # Функция для выполнения запроса с заданной командой curl
+            execute_curl_request() {
+                local cmd="$1"
+                local use_cert="$2"
+                
+                local safe_cmd=$(echo "$cmd" | sed "s/-u \"${grafana_user}:${grafana_password}\"/-u \"${grafana_user}:*****\"/")
+                print_info "Выполнение API запроса: $safe_cmd"
+                print_info "Payload: $sa_payload"
+                
+                log_diagnosis "CURL команда (без пароля): $safe_cmd"
+                log_diagnosis "Полная CURL команда: $(echo "$cmd" | sed "s/${grafana_password}/*****/g")"
+                log_diagnosis "Payload: $sa_payload"
+                log_diagnosis "Endpoint: ${grafana_url}/api/serviceaccounts"
+                log_diagnosis "Время начала запроса: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
+                
+                echo "DEBUG_SA_CREATE: Начало создания сервисного аккаунта" >&2
+                echo "DEBUG_SA_ENDPOINT: Endpoint: ${grafana_url}/api/serviceaccounts" >&2
+                echo "DEBUG_SA_PAYLOAD: Payload: $sa_payload" >&2
+                echo "DEBUG_CURL_CMD: Команда curl (без пароля): $(echo "$cmd" | sed "s/${grafana_password}/*****/g")" >&2
+                
+                print_info "Выполнение curl команды для создания сервисного аккаунта..."
+                log_diagnosis "Начало выполнения curl команды..."
+                
+                local curl_start_time=$(date +%s.%3N)
+                local response
+                if ! response=$(eval "$cmd" 2>&1); then
+                    local curl_end_time=$(date +%s.%3N)
+                    local curl_duration=$(echo "$curl_end_time - $curl_start_time" | bc)
+                    
+                    print_error "ОШИБКА выполнения curl команды!"
+                    print_info "Команда: $safe_cmd"
+                    print_info "Ошибка: $response"
+                    
+                    log_diagnosis "❌ ОШИБКА выполнения curl команды!"
+                    log_diagnosis "Время выполнения: ${curl_duration} секунд"
+                    log_diagnosis "Команда: $safe_cmd"
+                    log_diagnosis "Полная ошибка: $response"
+                    log_diagnosis "Код возврата: $?"
+                    log_diagnosis "Время ошибки: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
+                    
+                    echo ""
+                    echo "DEBUG_RETURN: Ошибка выполнения curl, возвращаем код 2" >&2
+                    return 2
+                fi
+                
                 local curl_end_time=$(date +%s.%3N)
                 local curl_duration=$(echo "$curl_end_time - $curl_start_time" | bc)
                 
-                print_error "ОШИБКА выполнения curl команды!"
-                print_info "Команда: $safe_curl_cmd"
-                print_info "Ошибка: $sa_response"
+                local code=$(echo "$response" | tail -1)
+                local body=$(echo "$response" | head -n -1)
                 
-                log_diagnosis "❌ ОШИБКА выполнения curl команды!"
+                echo "DEBUG_SA_RESPONSE: Ответ получен, HTTP код: $code" >&2
+                echo "DEBUG_SA_DURATION: Время выполнения: ${curl_duration} секунд" >&2
+                echo "DEBUG_SA_FULL_RESPONSE: Полный ответ от API:" >&2
+                echo "$response" >&2
+                echo "DEBUG_SA_BODY: Тело ответа: $body" >&2
+                
+                print_info "Ответ получен, HTTP код: $code"
+                print_info "Время выполнения запроса: ${curl_duration} секунд"
+                log_diagnosis "✅ Ответ получен"
                 log_diagnosis "Время выполнения: ${curl_duration} секунд"
-                log_diagnosis "Команда: $safe_curl_cmd"
-                log_diagnosis "Полная ошибка: $sa_response"
-                log_diagnosis "Код возврата: $?"
-                log_diagnosis "Время ошибки: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
+                log_diagnosis "HTTP код: $code"
+                log_diagnosis "Полный ответ:"
+                log_diagnosis "$response"
+                log_diagnosis "--- КОНЕЦ ОТВЕТА ---"
+                log_diagnosis "Тело ответа (сырое): $body"
+                log_diagnosis "Время получения ответа: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
                 
-                echo ""
-                echo "DEBUG_RETURN: Ошибка выполнения curl, возвращаем код 2" >&2
+                # Логируем ответ для диагностики
+                print_info "Ответ API создания сервисного аккаунта: HTTP $code"
+                print_info "Тело ответа (первые 200 символов): $(echo "$body" | head -c 200)"
+                
+                # Детальное логирование при ошибках
+                if [[ "$code" != "200" && "$code" != "201" && "$code" != "409" ]]; then
+                    print_warning "Ошибка API при создании сервисного аккаунта"
+                    print_info "Полный ответ:"
+                    echo "$response"
+                    print_info "Тело ответа (первые 500 символов):"
+                    echo "$body" | head -c 500
+                    echo
+                fi
+                
+                # Возвращаем код и тело
+                echo "$code:$body:$response"
+                return 0
+            }
+            
+            # Сначала пробуем без сертификатов
+            print_info "=== ПОПЫТКА 1: Без клиентских сертификатов ==="
+            log_diagnosis "=== ПОПЫТКА 1: Без клиентских сертификатов ==="
+            
+            local attempt1_result
+            if ! attempt1_result=$(execute_curl_request "$curl_cmd_without_cert" "false"); then
+                print_error "Ошибка выполнения запроса без сертификатов"
                 return 2
             fi
             
-            local curl_end_time=$(date +%s.%3N)
-            local curl_duration=$(echo "$curl_end_time - $curl_start_time" | bc)
+            http_code=$(echo "$attempt1_result" | cut -d: -f1)
+            sa_body=$(echo "$attempt1_result" | cut -d: -f2)
+            sa_response=$(echo "$attempt1_result" | cut -d: -f3-)
             
-            http_code=$(echo "$sa_response" | tail -1)
-            sa_body=$(echo "$sa_response" | head -n -1)
-            
-            echo "DEBUG_SA_RESPONSE: Ответ получен, HTTP код: $http_code" >&2
-            echo "DEBUG_SA_DURATION: Время выполнения: ${curl_duration} секунд" >&2
-            echo "DEBUG_SA_FULL_RESPONSE: Полный ответ от API:" >&2
-            echo "$sa_response" >&2
-            echo "DEBUG_SA_BODY: Тело ответа: $sa_body" >&2
-            
-            print_info "Ответ получен, HTTP код: $http_code"
-            print_info "Время выполнения запроса: ${curl_duration} секунд"
-            log_diagnosis "✅ Ответ получен"
-            log_diagnosis "Время выполнения: ${curl_duration} секунд"
-            log_diagnosis "HTTP код: $http_code"
-            log_diagnosis "Полный ответ:"
-            log_diagnosis "$sa_response"
-            log_diagnosis "--- КОНЕЦ ОТВЕТА ---"
-            log_diagnosis "Тело ответа (сырое): $sa_body"
-            log_diagnosis "Время получения ответа: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
-            
-            # Логируем ответ для диагностики
-            print_info "Ответ API создания сервисного аккаунта: HTTP $http_code"
-            print_info "Тело ответа (первые 200 символов): $(echo "$sa_body" | head -c 200)"
-            
-            # Детальное логирование при ошибках
-            if [[ "$http_code" != "200" && "$http_code" != "201" && "$http_code" != "409" ]]; then
-                print_warning "Ошибка API при создании сервисного аккаунта"
-                print_info "Полный ответ:"
-                echo "$sa_response"
-                print_info "Тело ответа (первые 500 символов):"
-                echo "$sa_body" | head -c 500
-                echo
+            # Проверяем результат первой попытки
+            if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "409" ]]; then
+                print_success "Запрос без сертификатов успешен (HTTP $http_code)"
+                log_diagnosis "✅ Запрос без сертификатов успешен"
+            else
+                print_warning "Запрос без сертификатов не удался (HTTP $http_code)"
+                log_diagnosis "⚠️  Запрос без сертификатов не удался"
+                
+                # Если есть команда с сертификатами, пробуем с ними
+                if [[ -n "$curl_cmd_with_cert" ]]; then
+                    print_info "=== ПОПЫТКА 2: С клиентскими сертификатами ==="
+                    log_diagnosis "=== ПОПЫТКА 2: С клиентскими сертификатами ==="
+                    print_info "Используем клиентские сертификаты для mTLS"
+                    log_diagnosis "Используем клиентские сертификаты для mTLS"
+                    log_diagnosis "Сертификат: /opt/vault/certs/grafana-client.crt (размер: $(stat -c%s "/opt/vault/certs/grafana-client.crt" 2>/dev/null || echo "не найден"))"
+                    log_diagnosis "Ключ: /opt/vault/certs/grafana-client.key (размер: $(stat -c%s "/opt/vault/certs/grafana-client.key" 2>/dev/null || echo "не найден"))"
+                    
+                    local attempt2_result
+                    if ! attempt2_result=$(execute_curl_request "$curl_cmd_with_cert" "true"); then
+                        print_error "Ошибка выполнения запроса с сертификатами"
+                        return 2
+                    fi
+                    
+                    http_code=$(echo "$attempt2_result" | cut -d: -f1)
+                    sa_body=$(echo "$attempt2_result" | cut -d: -f2)
+                    sa_response=$(echo "$attempt2_result" | cut -d: -f3-)
+                else
+                    print_info "Команда с сертификатами недоступна, пропускаем вторую попытку"
+                    log_diagnosis "⚠️  Команда с сертификатами недоступна"
+                fi
             fi
             
             log_diagnosis "Проверка HTTP кода: $http_code"
@@ -2469,15 +2523,17 @@ setup_grafana_datasource_and_dashboards() {
             
             token_payload=$(jq -n --arg name "$token_name" '{name:$name}')
             
-            local curl_cmd="curl -k -s -w \"\n%{http_code}\" \
+            # Вариант 3: Сначала пробуем без сертификатов, потом с ними
+            local curl_cmd_without_cert="curl -k -s -w \"\n%{http_code}\" \
                 -X POST \
                 -H \"Content-Type: application/json\" \
                 -u \"${grafana_user}:${grafana_password}\" \
                 -d \"$token_payload\" \
                 \"${grafana_url}/api/serviceaccounts/${sa_id}/tokens\""
             
+            local curl_cmd_with_cert=""
             if [[ -f "/opt/vault/certs/grafana-client.crt" && -f "/opt/vault/certs/grafana-client.key" ]]; then
-                curl_cmd="curl -k -s -w \"\n%{http_code}\" \
+                curl_cmd_with_cert="curl -k -s -w \"\n%{http_code}\" \
                     --cert \"/opt/vault/certs/grafana-client.crt\" \
                     --key \"/opt/vault/certs/grafana-client.key\" \
                     -X POST \
@@ -2487,15 +2543,35 @@ setup_grafana_datasource_and_dashboards() {
                     \"${grafana_url}/api/serviceaccounts/${sa_id}/tokens\""
             fi
             
-            print_info "Выполнение API запроса для создания токена сервисного аккаунта..."
-            token_response=$(eval "$curl_cmd" 2>&1)
-            token_code=$(echo "$token_response" | tail -1)
-            token_body=$(echo "$token_response" | head -n -1)
+            # Функция для выполнения запроса создания токена
+            execute_token_request() {
+                local cmd="$1"
+                local use_cert="$2"
+                
+                print_info "Выполнение API запроса для создания токена сервисного аккаунта..."
+                local response=$(eval "$cmd" 2>&1)
+                local code=$(echo "$response" | tail -1)
+                local body=$(echo "$response" | head -n -1)
+                
+                # Логируем ответ для диагностики
+                print_info "Ответ API создания токена: HTTP $code"
+                
+                echo "$code:$body:$response"
+                return 0
+            }
             
-            # Логируем ответ для диагностики
-            print_info "Ответ API создания токена: HTTP $token_code"
+            # Сначала пробуем без сертификатов
+            print_info "=== ПОПЫТКА 1: Создание токена без клиентских сертификатов ==="
+            local attempt1_result
+            attempt1_result=$(execute_token_request "$curl_cmd_without_cert" "false")
             
+            token_code=$(echo "$attempt1_result" | cut -d: -f1)
+            token_body=$(echo "$attempt1_result" | cut -d: -f2)
+            token_response=$(echo "$attempt1_result" | cut -d: -f3-)
+            
+            # Проверяем результат первой попытки
             if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
+                print_success "Создание токена без сертификатов успешно (HTTP $token_code)"
                 bearer_token=$(echo "$token_body" | jq -r '.key // empty')
                 if [[ -n "$bearer_token" && "$bearer_token" != "null" ]]; then
                     GRAFANA_BEARER_TOKEN="$bearer_token"
@@ -2507,8 +2583,38 @@ setup_grafana_datasource_and_dashboards() {
                     return 2  # Специальный код для "частичного успеха"
                 fi
             else
-                print_warning "Создание токена через API не удалось (HTTP $token_code)"
-                return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
+                print_warning "Создание токена без сертификатов не удалось (HTTP $token_code)"
+                
+                # Если есть команда с сертификатами, пробуем с ними
+                if [[ -n "$curl_cmd_with_cert" ]]; then
+                    print_info "=== ПОПЫТКА 2: Создание токена с клиентскими сертификатами ==="
+                    local attempt2_result
+                    attempt2_result=$(execute_token_request "$curl_cmd_with_cert" "true")
+                    
+                    token_code=$(echo "$attempt2_result" | cut -d: -f1)
+                    token_body=$(echo "$attempt2_result" | cut -d: -f2)
+                    token_response=$(echo "$attempt2_result" | cut -d: -f3-)
+                    
+                    if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
+                        print_success "Создание токена с сертификатами успешно (HTTP $token_code)"
+                        bearer_token=$(echo "$token_body" | jq -r '.key // empty')
+                        if [[ -n "$bearer_token" && "$bearer_token" != "null" ]]; then
+                            GRAFANA_BEARER_TOKEN="$bearer_token"
+                            export GRAFANA_BEARER_TOKEN
+                            print_success "Токен создан через API (с сертификатами)"
+                            return 0
+                        else
+                            print_warning "Токен создан, но значение пустое"
+                            return 2  # Специальный код для "частичного успеха"
+                        fi
+                    else
+                        print_warning "Создание токена через API не удалось (HTTP $token_code)"
+                        return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
+                    fi
+                else
+                    print_warning "Создание токена через API не удалось (HTTP $token_code)"
+                    return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
+                fi
             fi
         }
         

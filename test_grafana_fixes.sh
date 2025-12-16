@@ -105,3 +105,4 @@ echo "  sudo ./deploy_monitoring_script.sh"
 echo
 echo "Или только настройку Grafana:"
 echo "  sudo bash -c 'source deploy_monitoring_script.sh; setup_grafana_datasource_and_dashboards'"
+

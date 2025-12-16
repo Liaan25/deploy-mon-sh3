@@ -270,3 +270,4 @@ echo "  grep -i -E 'error|fail|denied|refused|timeout' ${DIAG_DIR}/*.txt"
 log "=== ЗАВЕРШЕНИЕ ДИАГНОСТИКИ ==="
 log "Архив создан: ${DIAG_DIR}.tar.gz"
 log "Размер архива: $(stat -c%s "${DIAG_DIR}.tar.gz") байт"
+

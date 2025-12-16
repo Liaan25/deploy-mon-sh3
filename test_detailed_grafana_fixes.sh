@@ -150,3 +150,4 @@ echo
 echo "4. Для принудительного пропуска настройки Grafana:"
 echo "   export SKIP_GRAFANA_SETUP=true"
 echo "   sudo ./deploy_monitoring_script.sh"
+

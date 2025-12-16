@@ -165,3 +165,4 @@ echo
 echo "4. Для принудительного тестирования fallback:"
 echo "   export FORCE_GRAFANA_FALLBACK=true"
 echo "   sudo ./deploy_monitoring_script.sh"
+

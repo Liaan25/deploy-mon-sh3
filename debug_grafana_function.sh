@@ -250,3 +250,4 @@ echo "1. $TEMP_SCRIPT - тестовый скрипт с функцией"
 echo "2. /tmp/simple_grafana_test.sh - упрощенный тест"
 echo "3. diagnose_grafana.sh - комплексная диагностика"
 echo "4. quick_grafana_api_test.sh - быстрый тест API"
+

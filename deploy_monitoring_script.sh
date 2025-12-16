@@ -1229,6 +1229,14 @@ EOF
 configure_grafana_ini() {
     print_step "Конфигурация grafana.ini"
     ensure_working_directory
+    
+    # Проверяем, установлена ли Grafana
+    if [[ ! -d "/etc/grafana" ]]; then
+        print_warning "Директория /etc/grafana не существует (Grafana не установлена)"
+        print_info "Если используется SKIP_RPM_INSTALL=true, это ожидаемо"
+        return 0
+    fi
+    
     "$WRAPPERS_DIR/config_writer_launcher.sh" /etc/grafana/grafana.ini << EOF
 [server]
 protocol = https
@@ -1275,6 +1283,14 @@ EOF
 configure_prometheus_files() {
     print_step "Создание файлов для Prometheus"
     ensure_working_directory
+    
+    # Проверяем, установлен ли Prometheus
+    if [[ ! -d "/etc/prometheus" ]]; then
+        print_warning "Директория /etc/prometheus не существует (Prometheus не установлен)"
+        print_info "Если используется SKIP_RPM_INSTALL=true, это ожидаемо"
+        return 0
+    fi
+    
     "$WRAPPERS_DIR/config_writer_launcher.sh" /etc/prometheus/web-config.yml << EOF
 tls_server_config:
   cert_file: /etc/prometheus/cert/server.crt
@@ -1567,6 +1583,14 @@ HARVEST_SERVICE_EOF
 configure_prometheus() {
     print_step "Настройка Prometheus"
     ensure_working_directory
+    
+    # Проверяем, установлен ли Prometheus
+    if [[ ! -d "/etc/prometheus" ]]; then
+        print_warning "Директория /etc/prometheus не существует (Prometheus не установлен)"
+        print_info "Если используется SKIP_RPM_INSTALL=true, это ожидаемо"
+        return 0
+    fi
+    
     local prometheus_config="/etc/prometheus/prometheus.yml"
 
     "$WRAPPERS_DIR/config_writer_launcher.sh" "$prometheus_config" << PROMETHEUS_CONFIG_EOF
@@ -1980,6 +2004,13 @@ setup_grafana_datasource_and_dashboards() {
     print_step "Настройка Prometheus datasource и дашбордов в Grafana"
     ensure_working_directory
     
+    # Проверяем, установлена ли Grafana (если используется SKIP_RPM_INSTALL)
+    if [[ ! -d "/usr/share/grafana" && ! -d "/etc/grafana" ]]; then
+        print_warning "Grafana не установлена (отсутствуют /usr/share/grafana и /etc/grafana)"
+        print_info "Если используется SKIP_RPM_INSTALL=true, пропускаем настройку datasource и дашбордов"
+        return 0
+    fi
+    
     # Файл для детального логирования диагностики
     local DIAGNOSIS_LOG="/tmp/grafana_diagnosis_$(date +%Y%m%d_%H%M%S).log"
     print_info "Детальная диагностика сохраняется в: $DIAGNOSIS_LOG"
@@ -2132,12 +2163,23 @@ setup_grafana_datasource_and_dashboards() {
         
         # Функция для создания сервисного аккаунта через API
         create_service_account_via_api() {
+            # Проверяем, нужно ли использовать localhost вместо доменного имени
+            local original_grafana_url="$grafana_url"
+            if [[ "${USE_GRAFANA_LOCALHOST:-false}" == "true" ]]; then
+                print_warning "USE_GRAFANA_LOCALHOST=true: используем localhost вместо доменного имени"
+                grafana_url="https://localhost:${GRAFANA_PORT}"
+                echo "DEBUG_LOCALHOST: Используем localhost вместо доменного имени" >&2
+                echo "DEBUG_LOCALHOST: Было: $original_grafana_url" >&2
+                echo "DEBUG_LOCALHOST: Стало: $grafana_url" >&2
+            fi
+            
             # Отладочное логирование - начало функции
             echo "DEBUG_FUNC_START: Функция create_service_account_via_api вызвана $(date '+%Y-%m-%d %H:%M:%S')" >&2
             echo "DEBUG_PARAMS: service_account_name='$service_account_name'" >&2
             echo "DEBUG_PARAMS: grafana_url='$grafana_url'" >&2
             echo "DEBUG_PARAMS: grafana_user='$grafana_user'" >&2
             echo "DEBUG_PARAMS: текущий каталог='$(pwd)'" >&2
+            echo "DEBUG_PARAMS: USE_GRAFANA_LOCALHOST='${USE_GRAFANA_LOCALHOST:-false}'" >&2
             
             print_info "=== НАЧАЛО create_service_account_via_api ==="
             log_diagnosis "=== ВХОД В create_service_account_via_api ==="
@@ -2234,6 +2276,7 @@ setup_grafana_datasource_and_dashboards() {
             echo "DEBUG_SA_CREATE: Начало создания сервисного аккаунта" >&2
             echo "DEBUG_SA_ENDPOINT: Endpoint: ${grafana_url}/api/serviceaccounts" >&2
             echo "DEBUG_SA_PAYLOAD: Payload: $sa_payload" >&2
+            echo "DEBUG_CURL_CMD: Команда curl (без пароля): $(echo "$curl_cmd" | sed "s/${grafana_password}/*****/g")" >&2
             
             print_info "Выполнение curl команды для создания сервисного аккаунта..."
             log_diagnosis "Начало выполнения curl команды..."
@@ -2267,6 +2310,9 @@ setup_grafana_datasource_and_dashboards() {
             
             echo "DEBUG_SA_RESPONSE: Ответ получен, HTTP код: $http_code" >&2
             echo "DEBUG_SA_DURATION: Время выполнения: ${curl_duration} секунд" >&2
+            echo "DEBUG_SA_FULL_RESPONSE: Полный ответ от API:" >&2
+            echo "$sa_response" >&2
+            echo "DEBUG_SA_BODY: Тело ответа: $sa_body" >&2
             
             print_info "Ответ получен, HTTP код: $http_code"
             print_info "Время выполнения запроса: ${curl_duration} секунд"

@@ -2132,6 +2132,13 @@ setup_grafana_datasource_and_dashboards() {
         
         # Функция для создания сервисного аккаунта через API
         create_service_account_via_api() {
+            # Отладочное логирование - начало функции
+            echo "DEBUG_FUNC_START: Функция create_service_account_via_api вызвана $(date '+%Y-%m-%d %H:%M:%S')" >&2
+            echo "DEBUG_PARAMS: service_account_name='$service_account_name'" >&2
+            echo "DEBUG_PARAMS: grafana_url='$grafana_url'" >&2
+            echo "DEBUG_PARAMS: grafana_user='$grafana_user'" >&2
+            echo "DEBUG_PARAMS: текущий каталог='$(pwd)'" >&2
+            
             print_info "=== НАЧАЛО create_service_account_via_api ==="
             log_diagnosis "=== ВХОД В create_service_account_via_api ==="
             
@@ -2157,6 +2164,9 @@ setup_grafana_datasource_and_dashboards() {
             log_diagnosis "Payload для создания сервисного аккаунта: $sa_payload"
             
             # Сначала проверим доступность API
+            echo "DEBUG_HEALTH_CHECK: Начало проверки доступности Grafana API" >&2
+            echo "DEBUG_HEALTH_URL: Проверяем URL: ${grafana_url}/api/health" >&2
+            
             print_info "Проверка доступности Grafana API перед созданием сервисного аккаунта..."
             local test_cmd="curl -k -s -w \"\n%{http_code}\" -u \"${grafana_user}:*****\" \"${grafana_url}/api/health\""
             print_info "Команда проверки health: $test_cmd"
@@ -2175,8 +2185,10 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "❌ Health check не прошел: HTTP $test_code"
                 log_diagnosis "Тело ответа: $test_body"
                 echo ""
+                echo "DEBUG_RETURN: Health check не прошел, возвращаем код 2" >&2
                 return 2
             else
+                echo "DEBUG_HEALTH_SUCCESS: Health check прошел успешно, HTTP 200" >&2
                 print_success "Grafana API /api/health доступен"
                 log_diagnosis "✅ Health check прошел успешно"
             fi
@@ -2219,6 +2231,10 @@ setup_grafana_datasource_and_dashboards() {
             log_diagnosis "Endpoint: ${grafana_url}/api/serviceaccounts"
             log_diagnosis "Время начала запроса: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
             
+            echo "DEBUG_SA_CREATE: Начало создания сервисного аккаунта" >&2
+            echo "DEBUG_SA_ENDPOINT: Endpoint: ${grafana_url}/api/serviceaccounts" >&2
+            echo "DEBUG_SA_PAYLOAD: Payload: $sa_payload" >&2
+            
             print_info "Выполнение curl команды для создания сервисного аккаунта..."
             log_diagnosis "Начало выполнения curl команды..."
             
@@ -2239,6 +2255,7 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "Время ошибки: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
                 
                 echo ""
+                echo "DEBUG_RETURN: Ошибка выполнения curl, возвращаем код 2" >&2
                 return 2
             fi
             
@@ -2247,6 +2264,9 @@ setup_grafana_datasource_and_dashboards() {
             
             http_code=$(echo "$sa_response" | tail -1)
             sa_body=$(echo "$sa_response" | head -n -1)
+            
+            echo "DEBUG_SA_RESPONSE: Ответ получен, HTTP код: $http_code" >&2
+            echo "DEBUG_SA_DURATION: Время выполнения: ${curl_duration} секунд" >&2
             
             print_info "Ответ получен, HTTP код: $http_code"
             print_info "Время выполнения запроса: ${curl_duration} секунд"
@@ -2286,12 +2306,14 @@ setup_grafana_datasource_and_dashboards() {
                     log_diagnosis "✅ Сервисный аккаунт создан, ID: $sa_id"
                     log_diagnosis "=== УСПЕШНОЕ СОЗДАНИЕ СЕРВИСНОГО АККАУНТА ==="
                     echo "$sa_id"
+                    echo "DEBUG_RETURN: Сервисный аккаунт успешно создан, возвращаем код 0" >&2
                     return 0
                 else
                     print_warning "Сервисный аккаунт создан, но ID не получен"
                     log_diagnosis "⚠️  Сервисный аккаунт создан, но ID не получен"
                     log_diagnosis "Тело ответа для анализа: $sa_body"
                     echo ""
+                    echo "DEBUG_RETURN: SA создан но ID не получен, возвращаем код 2" >&2
                     return 2  # Специальный код для "частичного успеха"
                 fi
             elif [[ "$http_code" == "409" ]]; then
@@ -2389,6 +2411,7 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "Время: $(date)"
                 
                 echo ""
+                echo "DEBUG_RETURN: API запрос не удался (HTTP $http_code), возвращаем код 2" >&2
                 return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
             fi
         }

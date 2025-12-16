@@ -2235,6 +2235,28 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "✅ Health check прошел успешно"
             fi
             
+            # Автоматическое определение: если доменное имя не работает, пробуем localhost
+            local try_localhost=false
+            local original_grafana_url_for_fallback="$grafana_url"
+            
+            # Проверяем, не является ли уже localhost
+            if [[ "$grafana_url" != *"localhost"* && "$grafana_url" != *"127.0.0.1"* ]]; then
+                print_info "Проверяем возможность использования localhost вместо доменного имени..."
+                log_diagnosis "Проверка возможности использования localhost"
+                
+                # Быстрая проверка: если health check через доменное имя работает,
+                # но создание SA возвращает 400, вероятно проблема с доменным именем
+                echo "DEBUG_DOMAIN_CHECK: Проверяем доменное имя vs localhost" >&2
+                echo "DEBUG_DOMAIN_CHECK: Текущий URL: $grafana_url" >&2
+                
+                # Если USE_GRAFANA_LOCALHOST не установлен, но мы видим проблемы с доменным именем,
+                # устанавливаем флаг для попытки localhost
+                if [[ "${USE_GRAFANA_LOCALHOST:-false}" == "false" ]]; then
+                    print_info "USE_GRAFANA_LOCALHOST не установлен, но будем готовы к fallback на localhost"
+                    try_localhost=true
+                fi
+            fi
+            
             # Вариант 3: Сначала пробуем без сертификатов, потом с ними
             local curl_cmd_without_cert="curl -k -s -w \"\n%{http_code}\" \
                 -X POST \
@@ -2369,27 +2391,86 @@ setup_grafana_datasource_and_dashboards() {
                 print_warning "Запрос без сертификатов не удался (HTTP $http_code)"
                 log_diagnosis "⚠️  Запрос без сертификатов не удался"
                 
-                # Если есть команда с сертификатами, пробуем с ними
-                if [[ -n "$curl_cmd_with_cert" ]]; then
-                    print_info "=== ПОПЫТКА 2: С клиентскими сертификатами ==="
-                    log_diagnosis "=== ПОПЫТКА 2: С клиентскими сертификатами ==="
-                    print_info "Используем клиентские сертификаты для mTLS"
-                    log_diagnosis "Используем клиентские сертификаты для mTLS"
-                    log_diagnosis "Сертификат: /opt/vault/certs/grafana-client.crt (размер: $(stat -c%s "/opt/vault/certs/grafana-client.crt" 2>/dev/null || echo "не найден"))"
-                    log_diagnosis "Ключ: /opt/vault/certs/grafana-client.key (размер: $(stat -c%s "/opt/vault/certs/grafana-client.key" 2>/dev/null || echo "не найден"))"
+                # Если получили HTTP 400 и можем попробовать localhost
+                if [[ "$http_code" == "400" && "$try_localhost" == "true" && "$grafana_url" != *"localhost"* ]]; then
+                    print_info "=== ПОПЫТКА LOCALHOST: Пробуем с localhost вместо доменного имени ==="
+                    log_diagnosis "=== ПОПЫТКА LOCALHOST: Пробуем с localhost вместо доменного имени ==="
                     
-                    local attempt2_result
-                    if ! attempt2_result=$(execute_curl_request "$curl_cmd_with_cert" "true"); then
-                        print_error "Ошибка выполнения запроса с сертификатами"
+                    # Сохраняем оригинальный URL для логирования
+                    local original_url="$grafana_url"
+                    
+                    # Меняем URL на localhost
+                    grafana_url="https://localhost:${GRAFANA_PORT}"
+                    print_info "Меняем URL с $original_url на $grafana_url"
+                    log_diagnosis "Смена URL: $original_url → $grafana_url"
+                    
+                    # Обновляем команды curl с новым URL
+                    curl_cmd_without_cert="curl -k -s -w \"\n%{http_code}\" \
+                        -X POST \
+                        -H \"Content-Type: application/json\" \
+                        -u \"${grafana_user}:${grafana_password}\" \
+                        -d \"$sa_payload\" \
+                        \"${grafana_url}/api/serviceaccounts\""
+                    
+                    if [[ -f "/opt/vault/certs/grafana-client.crt" && -f "/opt/vault/certs/grafana-client.key" ]]; then
+                        curl_cmd_with_cert="curl -k -s -w \"\n%{http_code}\" \
+                            --cert \"/opt/vault/certs/grafana-client.crt\" \
+                            --key \"/opt/vault/certs/grafana-client.key\" \
+                            -X POST \
+                            -H \"Content-Type: application/json\" \
+                            -u \"${grafana_user}:${grafana_password}\" \
+                            -d \"$sa_payload\" \
+                            \"${grafana_url}/api/serviceaccounts\""
+                    fi
+                    
+                    # Пробуем снова без сертификатов (с localhost)
+                    print_info "Пробуем создать сервисный аккаунт с localhost..."
+                    local localhost_result
+                    if ! localhost_result=$(execute_curl_request "$curl_cmd_without_cert" "false"); then
+                        print_error "Ошибка выполнения запроса с localhost"
+                        # Возвращаем оригинальный URL
+                        grafana_url="$original_grafana_url_for_fallback"
                         return 2
                     fi
                     
-                    http_code=$(echo "$attempt2_result" | cut -d: -f1)
-                    sa_body=$(echo "$attempt2_result" | cut -d: -f2)
-                    sa_response=$(echo "$attempt2_result" | cut -d: -f3-)
+                    http_code=$(echo "$localhost_result" | cut -d: -f1)
+                    sa_body=$(echo "$localhost_result" | cut -d: -f2)
+                    sa_response=$(echo "$localhost_result" | cut -d: -f3-)
+                    
+                    # Возвращаем оригинальный URL
+                    grafana_url="$original_grafana_url_for_fallback"
+                    
+                    # Проверяем результат localhost
+                    if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "409" ]]; then
+                        print_success "Запрос с localhost успешен (HTTP $http_code)"
+                        log_diagnosis "✅ Запрос с localhost успешен"
+                    else
+                        print_warning "Запрос с localhost также не удался (HTTP $http_code)"
+                        log_diagnosis "⚠️  Запрос с localhost также не удался"
+                    fi
                 else
-                    print_info "Команда с сертификатами недоступна, пропускаем вторую попытку"
-                    log_diagnosis "⚠️  Команда с сертификатами недоступна"
+                    # Если не пробовали localhost, пробуем с сертификатами
+                    if [[ -n "$curl_cmd_with_cert" ]]; then
+                        print_info "=== ПОПЫТКА 2: С клиентскими сертификатами ==="
+                        log_diagnosis "=== ПОПЫТКА 2: С клиентскими сертификатами ==="
+                        print_info "Используем клиентские сертификаты для mTLS"
+                        log_diagnosis "Используем клиентские сертификаты для mTLS"
+                        log_diagnosis "Сертификат: /opt/vault/certs/grafana-client.crt (размер: $(stat -c%s "/opt/vault/certs/grafana-client.crt" 2>/dev/null || echo "не найден"))"
+                        log_diagnosis "Ключ: /opt/vault/certs/grafana-client.key (размер: $(stat -c%s "/opt/vault/certs/grafana-client.key" 2>/dev/null || echo "не найден"))"
+                        
+                        local attempt2_result
+                        if ! attempt2_result=$(execute_curl_request "$curl_cmd_with_cert" "true"); then
+                            print_error "Ошибка выполнения запроса с сертификатами"
+                            return 2
+                        fi
+                        
+                        http_code=$(echo "$attempt2_result" | cut -d: -f1)
+                        sa_body=$(echo "$attempt2_result" | cut -d: -f2)
+                        sa_response=$(echo "$attempt2_result" | cut -d: -f3-)
+                    else
+                        print_info "Команда с сертификатами недоступна, пропускаем вторую попытку"
+                        log_diagnosis "⚠️  Команда с сертификатами недоступна"
+                    fi
                 fi
             fi
             

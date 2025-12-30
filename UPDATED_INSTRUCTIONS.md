@@ -125,3 +125,5 @@ curl -k -H "Authorization: Bearer $TOKEN" https://tvlds-mvp001939.cloud.delta.sb
 
 Просто запустите `sudo ./deploy_monitoring_script.sh` с опцией `SKIP_GRAFANA_DATA_CLEANUP=true`, и всё настроится автоматически.
 
+
+

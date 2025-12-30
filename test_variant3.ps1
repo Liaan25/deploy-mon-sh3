@@ -57,3 +57,5 @@ Write-Host ""
 # Очистка
 Remove-Item -Path $tempDir -Recurse -Force
 Write-Host "Тест завершен. Временные файлы удалены."
+
+

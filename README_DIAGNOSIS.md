@@ -154,3 +154,5 @@ sudo ./quick_grafana_api_test.sh 2>&1 | tee -a /tmp/grafana_diagnosis_$(date +%Y
 3. Логи Grafana: `sudo journalctl -u grafana-server -n 100`
 4. Содержимое `/opt/vault/conf/data_sec.json` (без паролей)
 
+
+

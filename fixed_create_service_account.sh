@@ -162,3 +162,5 @@ else
     echo "❌ ТЕСТ НЕ ПРОЙДЕН"
     echo "Проверьте логи в /tmp/grafana_api_debug_*.log"
 fi
+
+

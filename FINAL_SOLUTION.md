@@ -115,3 +115,5 @@ curl -k https://localhost:12990/metrics | head -20
 
 **Рекомендация:** Запустите `sudo bash setup_grafana_manually.sh` - это займет 2-3 минуты и полностью настроит Grafana.
 
+
+

@@ -111,3 +111,5 @@ curl -k https://tvlds-mvp001939.cloud.delta.sbrf.ru:9090
 sudo jq '.grafana_web' /opt/vault/conf/data_sec.json
 ```
 
+
+

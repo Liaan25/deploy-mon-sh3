@@ -124,3 +124,5 @@ echo "2. Используйте export SKIP_GRAFANA_DATA_CLEANUP=true перед
 echo "3. Убедитесь, что порт 3000 не занят другим процессом"
 
 
+
+

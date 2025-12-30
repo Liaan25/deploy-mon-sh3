@@ -258,3 +258,5 @@ echo "Запустите команду для автоматической за
 echo "sed -i '2165,2598d' deploy_monitoring_script.sh && sed -i '2165r /tmp/fixed_function.sh' deploy_monitoring_script.sh"
 echo
 echo "⚠️  ВНИМАНИЕ: Сделайте backup файла перед применением патча!"
+
+

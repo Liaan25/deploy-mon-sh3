@@ -749,14 +749,10 @@ echo "[DEBUG] === VERIFY_SCRIPT.SH ЗАВЕРШЕН ==="
                 }
             }
         }
-            }
-        }
 
         // CDL ЭТАП: Развертывание (должен быть на masterLin для доступа к сети)
         stage('CDL: Развертывание на сервер') {
             agent { label 'masterLin&&sbel8&&!static' }
-            stages {
-                stage('Выполнение развертывания') {
             steps {
                 script {
                     echo "[STEP] Запуск развертывания на удаленном сервере..."
@@ -940,8 +936,6 @@ ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
                     echo " • Домен: ${domainName}"
                     echo "==============================="
                 }
-            }
-        }
             }
         }
     }

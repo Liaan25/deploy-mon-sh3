@@ -132,3 +132,5 @@ echo "Самый быстрый способ решить проблему:"
 echo "USE_GRAFANA_LOCALHOST=true sudo ./deploy_monitoring_script.sh"
 echo
 echo "Если это не поможет, запустите диагностику для определения точной причины."
+
+

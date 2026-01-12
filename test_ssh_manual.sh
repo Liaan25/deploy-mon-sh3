@@ -127,3 +127,5 @@ echo "3. Убедитесь что Jenkins агент имеет доступ к
 echo
 echo "Быстрая команда для проверки из Jenkins:"
 echo "ssh -i \"\$SSH_KEY\" -v \"\$SSH_USER@$SERVER_ADDRESS\" 'echo test'"
+
+

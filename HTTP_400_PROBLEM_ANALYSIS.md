@@ -123,3 +123,5 @@ sudo ./deploy_monitoring_script.sh
 4. **Проверить SSL сертификаты** для доменного имени
 
 
+
+

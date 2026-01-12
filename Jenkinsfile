@@ -1,5 +1,5 @@
 pipeline {
-    agent { label 'linux' }
+    agent none
 
     parameters {
         string(name: 'SERVER_ADDRESS',     defaultValue: params.SERVER_ADDRESS ?: '',     description: 'Адрес сервера для подключения по SSH')
@@ -24,7 +24,9 @@ pipeline {
     }
 
     stages {
-        stage('Очистка workspace и отладка') {
+        // CI ЭТАП: Подготовка и диагностика (можно на clearAgent)
+        stage('CI: Подготовка и диагностика') {
+            agent { label 'clearAgent&&sbel8&&!static' }
             steps {
                 script {
                     echo "================================================"
@@ -747,8 +749,14 @@ echo "[DEBUG] === VERIFY_SCRIPT.SH ЗАВЕРШЕН ==="
                 }
             }
         }
+            }
+        }
 
-        stage('Выполнение развертывания') {
+        // CDL ЭТАП: Развертывание (должен быть на masterLin для доступа к сети)
+        stage('CDL: Развертывание на сервер') {
+            agent { label 'masterLin&&sbel8&&!static' }
+            stages {
+                stage('Выполнение развертывания') {
             steps {
                 script {
                     echo "[STEP] Запуск развертывания на удаленном сервере..."
@@ -932,6 +940,8 @@ ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
                     echo " • Домен: ${domainName}"
                     echo "==============================="
                 }
+            }
+        }
             }
         }
     }

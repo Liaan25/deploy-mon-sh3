@@ -121,6 +121,237 @@ pipeline {
                 }
             }
         }
+        
+        stage('Расширенная диагностика сети и сервера') {
+            steps {
+                script {
+                    echo "================================================"
+                    echo "=== РАСШИРЕННАЯ ДИАГНОСТИКА СЕТИ И СЕРВЕРА ==="
+                    echo "================================================"
+                    echo "[DEBUG] Целевой сервер: ${params.SERVER_ADDRESS}"
+                    echo "[DEBUG] Jenkins агент: ${env.NODE_NAME ?: 'не определен'}"
+                    echo ""
+                    
+                    sh '''
+                        echo "[DIAG] === 1. ИНФОРМАЦИЯ О JENKINS АГЕНТЕ ==="
+                        echo "[DIAG] Имя хоста агента: $(hostname -f 2>/dev/null || hostname)"
+                        echo "[DIAG] IP адреса агента:"
+                        ip addr show 2>/dev/null | grep -E "inet " | awk '{print "[DIAG]   " $2 " (" $NF ")"}' || echo "[DIAG]   Не удалось получить IP адреса"
+                        echo ""
+                        
+                        echo "[DIAG] === 2. ДИАГНОСТИКА DNS ==="
+                        echo "[DIAG] Разрешение имени ''' + params.SERVER_ADDRESS + '''..."
+                        nslookup ''' + params.SERVER_ADDRESS + ''' 2>/dev/null || {
+                            echo "[ERROR] Ошибка DNS разрешения"
+                            echo "[DIAG] Попробуем через dig:"
+                            dig ''' + params.SERVER_ADDRESS + ''' +short 2>/dev/null || echo "[DIAG] dig не доступен"
+                        }
+                        echo ""
+                        
+                        echo "[DIAG] === 3. ПРОВЕРКА PING ==="
+                        echo "[DIAG] Пинг сервера ''' + params.SERVER_ADDRESS + ''' (3 попытки):"
+                        if command -v ping >/dev/null 2>&1; then
+                            ping -c 3 -W 2 ''' + params.SERVER_ADDRESS + ''' 2>/dev/null || echo "[WARNING] Ping не работает или недоступен"
+                        else
+                            echo "[DIAG] Команда ping не найдена"
+                        fi
+                        echo ""
+                        
+                        echo "[DIAG] === 4. ПРОВЕРКА ПОРТОВ ==="
+                        echo "[DIAG] Проверка порта 22 (SSH) на ''' + params.SERVER_ADDRESS + ''':"
+                        if command -v nc >/dev/null 2>&1; then
+                            timeout 5 nc -zv ''' + params.SERVER_ADDRESS + ''' 22 2>&1 && echo "[OK] Порт 22 открыт" || echo "[ERROR] Порт 22 закрыт/недоступен"
+                        elif command -v telnet >/dev/null 2>&1; then
+                            timeout 3 bash -c "echo > /dev/tcp/''' + params.SERVER_ADDRESS + '''/22" 2>/dev/null && echo "[OK] Порт 22 открыт" || echo "[ERROR] Порт 22 закрыт/недоступен"
+                        else
+                            echo "[DIAG] Команды nc/telnet не найдены, используем curl:"
+                            curl -s --connect-timeout 5 telnet://''' + params.SERVER_ADDRESS + ''':22 2>&1 | head -1 || echo "[DIAG] Не удалось проверить порт"
+                        fi
+                        echo ""
+                        
+                        echo "[DIAG] === 5. ТРАССИРОВКА МАРШРУТА ==="
+                        echo "[DIAG] Трассировка до ''' + params.SERVER_ADDRESS + ''':"
+                        if command -v traceroute >/dev/null 2>&1; then
+                            traceroute -n -m 5 -w 1 ''' + params.SERVER_ADDRESS + ''' 2>/dev/null | head -10 || echo "[DIAG] traceroute не сработал"
+                        elif command -v tracepath >/dev/null 2>&1; then
+                            tracepath -n -m 5 ''' + params.SERVER_ADDRESS + ''' 2>/dev/null | head -10 || echo "[DIAG] tracepath не сработал"
+                        else
+                            echo "[DIAG] Команды traceroute/tracepath не найдены"
+                        fi
+                        echo ""
+                        
+                        echo "[DIAG] === 6. ПРОВЕРКА СЕТЕВЫХ ИНТЕРФЕЙСОВ ==="
+                        echo "[DIAG] Активные сетевые интерфейсы:"
+                        ip link show 2>/dev/null | grep -E "^[0-9]+:" | awk '{print "[DIAG]   " $2 " " $3}' || netstat -i 2>/dev/null | head -5 || echo "[DIAG]   Не удалось получить информацию"
+                        echo ""
+                        
+                        echo "[DIAG] === 7. ПРОВЕРКА МАРШРУТОВ ==="
+                        echo "[DIAG] Таблица маршрутизации (первые 10 строк):"
+                        ip route show 2>/dev/null | head -10 || netstat -rn 2>/dev/null | head -10 || echo "[DIAG]   Не удалось получить маршруты"
+                        echo ""
+                        
+                        echo "[DIAG] === 8. ПРОВЕРКА ФАЙРВОЛА ==="
+                        echo "[DIAG] Проверка правил iptables (если доступно):"
+                        if command -v iptables >/dev/null 2>&1; then
+                            iptables -L -n 2>/dev/null | grep -E "(22|ssh)" | head -5 || echo "[DIAG]   Нет правил для порта 22 или iptables пуст"
+                        else
+                            echo "[DIAG]   iptables не найден"
+                        fi
+                        echo ""
+                        
+                        echo "[DIAG] === 9. ПРОВЕРКА SSH КОНФИГУРАЦИИ ==="
+                        echo "[DIAG] SSH конфигурация агента:"
+                        if [ -f ~/.ssh/config ]; then
+                            echo "[DIAG]   Найден ~/.ssh/config"
+                            grep -i ''' + params.SERVER_ADDRESS + ''' ~/.ssh/config 2>/dev/null || echo "[DIAG]   Нет конфигурации для этого сервера"
+                        else
+                            echo "[DIAG]   ~/.ssh/config не найден"
+                        fi
+                        echo "[DIAG] Известные хосты:"
+                        if [ -f ~/.ssh/known_hosts ]; then
+                            grep -i ''' + params.SERVER_ADDRESS + ''' ~/.ssh/known_hosts 2>/dev/null && echo "[DIAG]   Сервер есть в known_hosts" || echo "[DIAG]   Сервера нет в known_hosts"
+                        else
+                            echo "[DIAG]   ~/.ssh/known_hosts не найден"
+                        fi
+                        echo ""
+                        
+                        echo "[DIAG] === 10. ПРОВЕРКА ВРЕМЕНИ И ДАТЫ ==="
+                        echo "[DIAG] Текущее время на агенте: $(date)"
+                        echo "[DIAG] Часовой пояс: $(timedatectl status 2>/dev/null | grep "Time zone" || date +%Z)"
+                        echo ""
+                        
+                        echo "[DIAG] === 11. ПРОВЕРКА ДОСТУПНОСТИ СЕРВЕРА ИЗ РАЗНЫХ ИСТОЧНИКОВ ==="
+                        echo "[DIAG] Попытка подключения через разные методы:"
+                        
+                        # Метод 1: Через IP (если мы знаем IP)
+                        SERVER_IP=$(nslookup ''' + params.SERVER_ADDRESS + ''' 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+                        if [ -n "$SERVER_IP" ]; then
+                            echo "[DIAG]   IP сервера: $SERVER_IP"
+                            echo "[DIAG]   Проверка порта 22 по IP:"
+                            timeout 3 bash -c "echo > /dev/tcp/$SERVER_IP/22" 2>/dev/null && echo "[DIAG]     ✅ Порт открыт по IP" || echo "[DIAG]     ❌ Порт закрыт по IP"
+                        fi
+                        
+                        # Метод 2: Через telnet (если есть)
+                        if command -v telnet >/dev/null 2>&1; then
+                            echo "[DIAG]   Тест через telnet (таймаут 3с):"
+                            timeout 3 telnet ''' + params.SERVER_ADDRESS + ''' 22 2>&1 | grep -E "(Connected|refused|timeout)" | head -1 || echo "[DIAG]     Telnet тест не удался"
+                        fi
+                        
+                        echo ""
+                        echo "[DIAG] === ДИАГНОСТИКА ЗАВЕРШЕНА ==="
+                        echo "[DIAG] Сводка:"
+                        echo "[DIAG] - Jenkins агент: $(hostname)"
+                        echo "[DIAG] - Целевой сервер: ''' + params.SERVER_ADDRESS + '''"
+                        echo "[DIAG] - Время проверки: $(date)"
+                        echo "[DIAG] - Статус: Сбор диагностической информации завершен"
+                    '''
+                    
+                    echo ""
+                    echo "[INFO] === РЕКОМЕНДАЦИИ ПО ДИАГНОСТИКЕ ==="
+                    echo "[INFO] 1. Сравните эту диагностику с успешным ребилдом"
+                    echo "[INFO] 2. Проверьте различия в Jenkins агентах"
+                    echo "[INFO] 3. Проверьте сетевую доступность между агентом и сервером"
+                    echo "[INFO] 4. Проверьте фаервол и правила безопасности"
+                    echo "[INFO] 5. Убедитесь что сервер запущен и SSH демон работает"
+                }
+            }
+        }
+        
+        stage('Сравнение с успешным ребилдом') {
+            steps {
+                script {
+                    echo "================================================"
+                    echo "=== СРАВНЕНИЕ С УСПЕШНЫМ РЕБИЛДОМ ==="
+                    echo "================================================"
+                    
+                    // Получаем информацию о последнем успешном билде
+                    def lastSuccessfulBuild = currentBuild.rawBuild.getProject().getLastSuccessfulBuild()
+                    
+                    if (lastSuccessfulBuild) {
+                        echo "[COMPARE] Последний успешный билд: #${lastSuccessfulBuild.number}"
+                        echo "[COMPARE] Время успешного билда: ${lastSuccessfulBuild.getTime()}"
+                        echo "[COMPARE] Продолжительность: ${lastSuccessfulBuild.getDuration()} ms"
+                        
+                        // Проверяем, был ли это ребилд
+                        try {
+                            def wasRebuild = lastSuccessfulBuild.getCause(hudson.model.Cause$UpstreamCause) != null
+                            echo "[COMPARE] Успешный билд был ребилдом: ${wasRebuild}"
+                        } catch (Exception e) {
+                            echo "[COMPARE] Не удалось определить тип успешного билда"
+                        }
+                        
+                        // Получаем параметры успешного билда
+                        echo "[COMPARE] Параметры успешного билда:"
+                        def successfulParams = lastSuccessfulBuild.getAction(hudson.model.ParametersAction)
+                        if (successfulParams) {
+                            successfulParams.getParameters().each { param ->
+                                echo "[COMPARE]   ${param.name}: '${param.value}'"
+                            }
+                        } else {
+                            echo "[COMPARE]   Не удалось получить параметры успешного билда"
+                        }
+                        
+                        // Сравниваем ключевые параметры
+                        echo ""
+                        echo "[COMPARE] === СРАВНЕНИЕ КЛЮЧЕВЫХ ПАРАМЕТРОВ ==="
+                        
+                        def currentServer = params.SERVER_ADDRESS ?: ''
+                        def currentSshCreds = params.SSH_CREDENTIALS_ID ?: ''
+                        
+                        // Получаем параметры успешного билда для сравнения
+                        def successfulServer = currentServer
+                        def successfulSshCreds = currentSshCreds
+                        
+                        if (successfulParams) {
+                            successfulParams.getParameters().each { param ->
+                                if (param.name == 'SERVER_ADDRESS') {
+                                    successfulServer = param.value ?: ''
+                                }
+                                if (param.name == 'SSH_CREDENTIALS_ID') {
+                                    successfulSshCreds = param.value ?: ''
+                                }
+                            }
+                        }
+                        
+                        echo "[COMPARE] SERVER_ADDRESS:"
+                        echo "[COMPARE]   Текущий: '${currentServer}'"
+                        echo "[COMPARE]   Успешный: '${successfulServer}'"
+                        echo "[COMPARE]   Совпадают: ${currentServer == successfulServer}"
+                        echo ""
+                        
+                        echo "[COMPARE] SSH_CREDENTIALS_ID:"
+                        echo "[COMPARE]   Текущий: '${currentSshCreds}'"
+                        echo "[COMPARE]   Успешный: '${successfulSshCreds}'"
+                        echo "[COMPARE]   Совпадают: ${currentSshCreds == successfulSshCreds}"
+                        echo ""
+                        
+                        // Проверяем Jenkins агента успешного билда
+                        def successfulNode = lastSuccessfulBuild.getBuiltOnStr()
+                        def currentNode = env.NODE_NAME ?: 'не определен'
+                        
+                        echo "[COMPARE] Jenkins агенты:"
+                        echo "[COMPARE]   Текущий: '${currentNode}'"
+                        echo "[COMPARE]   Успешный: '${successfulNode}'"
+                        echo "[COMPARE]   Совпадают: ${currentNode == successfulNode}"
+                        
+                        if (currentNode != successfulNode) {
+                            echo "[WARNING] ⚠️  Билды запущены на разных Jenkins агентах!"
+                            echo "[WARNING] Это может быть причиной проблемы с доступностью сервера."
+                        }
+                        
+                    } else {
+                        echo "[COMPARE] ❌ Не найден успешный билд для сравнения"
+                        echo "[COMPARE] Это может быть первый запуск или все предыдущие билды упали"
+                    }
+                    
+                    echo ""
+                    echo "[COMPARE] === ВЫВОДЫ ==="
+                    echo "[COMPARE] 1. Если параметры отличаются - проблема в параметрах пайплайна"
+                    echo "[COMPARE] 2. Если агенты отличаются - проблема в сетевой доступности между агентами"
+                    echo "[COMPARE] 3. Если всё совпадает - проблема временная (сервер/сеть)"
+                }
+            }
+        }
 
         stage('Получение данных из Vault в temp_data_cred.json') {
             steps {

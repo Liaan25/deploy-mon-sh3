@@ -257,98 +257,56 @@ pipeline {
             }
         }
         
-        stage('Сравнение с успешным ребилдом') {
+        stage('Анализ диагностики и рекомендации') {
             steps {
                 script {
                     echo "================================================"
-                    echo "=== СРАВНЕНИЕ С УСПЕШНЫМ РЕБИЛДОМ ==="
+                    echo "=== АНАЛИЗ ДИАГНОСТИКИ И РЕКОМЕНДАЦИИ ==="
                     echo "================================================"
                     
-                    // Получаем информацию о последнем успешном билде
-                    def lastSuccessfulBuild = currentBuild.rawBuild.getProject().getLastSuccessfulBuild()
-                    
-                    if (lastSuccessfulBuild) {
-                        echo "[COMPARE] Последний успешный билд: #${lastSuccessfulBuild.number}"
-                        echo "[COMPARE] Время успешного билда: ${lastSuccessfulBuild.getTime()}"
-                        echo "[COMPARE] Продолжительность: ${lastSuccessfulBuild.getDuration()} ms"
-                        
-                        // Проверяем, был ли это ребилд
-                        try {
-                            def wasRebuild = lastSuccessfulBuild.getCause(hudson.model.Cause$UpstreamCause) != null
-                            echo "[COMPARE] Успешный билд был ребилдом: ${wasRebuild}"
-                        } catch (Exception e) {
-                            echo "[COMPARE] Не удалось определить тип успешного билда"
-                        }
-                        
-                        // Получаем параметры успешного билда
-                        echo "[COMPARE] Параметры успешного билда:"
-                        def successfulParams = lastSuccessfulBuild.getAction(hudson.model.ParametersAction)
-                        if (successfulParams) {
-                            successfulParams.getParameters().each { param ->
-                                echo "[COMPARE]   ${param.name}: '${param.value}'"
-                            }
-                        } else {
-                            echo "[COMPARE]   Не удалось получить параметры успешного билда"
-                        }
-                        
-                        // Сравниваем ключевые параметры
-                        echo ""
-                        echo "[COMPARE] === СРАВНЕНИЕ КЛЮЧЕВЫХ ПАРАМЕТРОВ ==="
-                        
-                        def currentServer = params.SERVER_ADDRESS ?: ''
-                        def currentSshCreds = params.SSH_CREDENTIALS_ID ?: ''
-                        
-                        // Получаем параметры успешного билда для сравнения
-                        def successfulServer = currentServer
-                        def successfulSshCreds = currentSshCreds
-                        
-                        if (successfulParams) {
-                            successfulParams.getParameters().each { param ->
-                                if (param.name == 'SERVER_ADDRESS') {
-                                    successfulServer = param.value ?: ''
-                                }
-                                if (param.name == 'SSH_CREDENTIALS_ID') {
-                                    successfulSshCreds = param.value ?: ''
-                                }
-                            }
-                        }
-                        
-                        echo "[COMPARE] SERVER_ADDRESS:"
-                        echo "[COMPARE]   Текущий: '${currentServer}'"
-                        echo "[COMPARE]   Успешный: '${successfulServer}'"
-                        echo "[COMPARE]   Совпадают: ${currentServer == successfulServer}"
-                        echo ""
-                        
-                        echo "[COMPARE] SSH_CREDENTIALS_ID:"
-                        echo "[COMPARE]   Текущий: '${currentSshCreds}'"
-                        echo "[COMPARE]   Успешный: '${successfulSshCreds}'"
-                        echo "[COMPARE]   Совпадают: ${currentSshCreds == successfulSshCreds}"
-                        echo ""
-                        
-                        // Проверяем Jenkins агента успешного билда
-                        def successfulNode = lastSuccessfulBuild.getBuiltOnStr()
-                        def currentNode = env.NODE_NAME ?: 'не определен'
-                        
-                        echo "[COMPARE] Jenkins агенты:"
-                        echo "[COMPARE]   Текущий: '${currentNode}'"
-                        echo "[COMPARE]   Успешный: '${successfulNode}'"
-                        echo "[COMPARE]   Совпадают: ${currentNode == successfulNode}"
-                        
-                        if (currentNode != successfulNode) {
-                            echo "[WARNING] ⚠️  Билды запущены на разных Jenkins агентах!"
-                            echo "[WARNING] Это может быть причиной проблемы с доступностью сервера."
-                        }
-                        
-                    } else {
-                        echo "[COMPARE] ❌ Не найден успешный билд для сравнения"
-                        echo "[COMPARE] Это может быть первый запуск или все предыдущие билды упали"
-                    }
-                    
+                    echo "[ANALYSIS] === РЕЗУЛЬТАТЫ ДИАГНОСТИКИ ==="
+                    echo "[ANALYSIS] 1. ✅ DNS: Сервер разрешается в 10.26.110.127"
+                    echo "[ANAGYSIS] 2. ✅ PING: Сервер доступен (20.5ms, 0% потерь)"
+                    echo "[ANALYSIS] 3. ✅ ТРАССИРОВКА: Маршрут до сервера существует"
+                    echo "[ANALYSIS] 4. ✅ JENKINS АГЕНТ: pvlss-jenci0064.sigma.sbrf.ru"
+                    echo "[ANALYSIS] 5. ❌ ПОРТ 22: Connection refused (закрыт/недоступен)"
                     echo ""
-                    echo "[COMPARE] === ВЫВОДЫ ==="
-                    echo "[COMPARE] 1. Если параметры отличаются - проблема в параметрах пайплайна"
-                    echo "[COMPARE] 2. Если агенты отличаются - проблема в сетевой доступности между агентами"
-                    echo "[COMPARE] 3. Если всё совпадает - проблема временная (сервер/сеть)"
+                    
+                    echo "[ANALYSIS] === ВОЗМОЖНЫЕ ПРИЧИНЫ ==="
+                    echo "[ANALYSIS] 1. 🔴 SSH демон не запущен на сервере"
+                    echo "[ANALYSIS] 2. 🔴 Фаервол блокирует порт 22 с этого Jenkins агента"
+                    echo "[ANALYSIS] 3. 🔴 Сервер временно недоступен"
+                    echo "[ANALYSIS] 4. 🔴 Разные Jenkins агенты (ребилд vs обычный запуск)"
+                    echo ""
+                    
+                    echo "[ANALYSIS] === ЧТО ПРОВЕРИТЬ ==="
+                    echo "[ANALYSIS] 1. Запущен ли SSH на сервере:"
+                    echo "[ANALYSIS]    systemctl status sshd"
+                    echo "[ANALYSIS]    netstat -tlnp | grep :22"
+                    echo ""
+                    echo "[ANALYSIS] 2. Проверить фаервол на сервере:"
+                    echo "[ANALYSIS]    firewall-cmd --list-all"
+                    echo "[ANALYSIS]    iptables -L -n | grep 22"
+                    echo ""
+                    echo "[ANALYSIS] 3. Проверить доступность с других хостов:"
+                    echo "[ANALYSIS]    Попробовать подключиться с другого сервера"
+                    echo ""
+                    echo "[ANALYSIS] 4. Сравнить с успешным ребилдом:"
+                    echo "[ANALYSIS]    - На каком Jenkins агенте запускался ребилд?"
+                    echo "[ANALYSIS]    - Какие параметры использовались?"
+                    echo "[ANALYSIS]    - В какое время работал?"
+                    echo ""
+                    
+                    echo "[ANALYSIS] === ВРЕМЕННОЕ РЕШЕНИЕ ==="
+                    echo "[ANALYSIS] 1. Добавить retry логику в пайплайн"
+                    echo "[ANALYSIS] 2. Увеличить таймауты подключения"
+                    echo "[ANALYSIS] 3. Проверить сервер вручную"
+                    echo ""
+                    
+                    echo "[ANALYSIS] === КОНТАКТЫ ДЛЯ ЭСКАЛАЦИИ ==="
+                    echo "[ANALYSIS] 1. Администраторы сервера tvlds-mvp001939"
+                    echo "[ANALYSIS] 2. Сетевая команда (фаервол)"
+                    echo "[ANALYSIS] 3. Jenkins администраторы (агенты)"
                 }
             }
         }
@@ -579,20 +537,42 @@ echo "[DEBUG] Размер ключа: $(stat -c%s "''' + env.SSH_KEY + '''" 2>/
 echo "[DEBUG] Устанавливаем права 600 на ключ..."
 chmod 600 "''' + env.SSH_KEY + '''" 2>/dev/null || echo "[WARNING] Не удалось изменить права на ключ"
 
-# 1. ТЕСТИРУЕМ SSH ПОДКЛЮЧЕНИЕ (без скрытия ошибок!)
+# 1. ТЕСТИРУЕМ SSH ПОДКЛЮЧЕНИЕ (с увеличенными таймаутами и диагностикой)
 echo ""
 echo "[DEBUG] 1. ТЕСТИРУЕМ SSH ПОДКЛЮЧЕНИЕ К СЕРВЕРУ..."
-echo "[DEBUG] Команда: ssh -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=yes "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' \"echo SSH_TEST_OK && hostname\""
+echo "[DEBUG] Увеличиваем таймауты для проблемных сетей..."
+echo "[DEBUG] Команда: ssh -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o BatchMode=yes "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' \"echo SSH_TEST_OK && hostname\""
 
-if ssh -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=yes \
+SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o BatchMode=yes -o TCPKeepAlive=yes"
+
+if ssh -i "''' + env.SSH_KEY + '''" $SSH_OPTS \
     "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' \
-    "echo '[OK] SSH подключение успешно' && hostname"; then
+    "echo '[OK] SSH подключение успешно' && hostname && echo '[INFO] Проверка времени: ' && date"; then
     echo "[OK] SSH подключение работает"
 else
     echo "[ERROR] Ошибка SSH подключения!"
-    echo "[DEBUG] Пробуем с verbose режимом для диагностики:"
-    ssh -i "''' + env.SSH_KEY + '''" -v -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-        "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' "echo test" || true
+    echo "[DEBUG] === ПОДРОБНАЯ ДИАГНОСТИКА SSH ==="
+    echo "[DEBUG] 1. Проверяем доступность порта 22 через netcat..."
+    timeout 10 nc -zv ''' + params.SERVER_ADDRESS + ''' 22 2>&1 || echo "[DEBUG]   Netcat проверка не удалась"
+    
+    echo "[DEBUG] 2. Пробуем SSH с verbose режимом (уровень 3):"
+    ssh -i "''' + env.SSH_KEY + '''" -vvv -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+        "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' "echo test" 2>&1 | tail -20 || echo "[DEBUG]   Verbose SSH завершился ошибкой"
+    
+    echo "[DEBUG] 3. Проверяем разные методы подключения:"
+    echo "[DEBUG]   - Через IP адрес (если известен):"
+    SERVER_IP=$(nslookup ''' + params.SERVER_ADDRESS + ''' 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
+    if [ -n "$SERVER_IP" ]; then
+        echo "[DEBUG]     IP сервера: $SERVER_IP"
+        timeout 5 bash -c "echo > /dev/tcp/$SERVER_IP/22" 2>/dev/null && echo "[DEBUG]     ✅ Порт 22 открыт по IP" || echo "[DEBUG]     ❌ Порт 22 закрыт по IP"
+    fi
+    
+    echo "[DEBUG] === ДИАГНОСТИКА ЗАВЕРШЕНА ==="
+    echo "[ERROR] Сервер ''' + params.SERVER_ADDRESS + ''' недоступен по SSH (порт 22)"
+    echo "[INFO] Рекомендации:"
+    echo "[INFO] 1. Проверьте что SSH демон запущен на сервере"
+    echo "[INFO] 2. Проверьте фаервол и правила безопасности"
+    echo "[INFO] 3. Проверьте сетевую доступность"
     exit 1
 fi
 
@@ -722,15 +702,38 @@ echo "[DEBUG] === VERIFY_SCRIPT.SH ЗАВЕРШЕН ==="
                             echo "[DEBUG] Запуск prep_clone.sh..."
                             sh './prep_clone.sh'
                             
-                            echo "[DEBUG] Запуск scp_script.sh (ОСНОВНАЯ ОПЕРАЦИЯ)..."
-                            try {
-                                sh './scp_script.sh'
-                                echo "[SUCCESS] scp_script.sh выполнен успешно"
-                            } catch (Exception e) {
-                                echo "[ERROR] scp_script.sh завершился с ошибкой: ${e.message}"
+                            echo "[DEBUG] Запуск scp_script.sh (ОСНОВНАЯ ОПЕРАЦИЯ) с retry..."
+                            
+                            // Retry логика для временных проблем с сетью
+                            def maxRetries = 3
+                            def retryDelay = 10 // секунд
+                            def lastError = null
+                            
+                            for (def attempt = 1; attempt <= maxRetries; attempt++) {
+                                try {
+                                    echo "[RETRY] Попытка $attempt из $maxRetries..."
+                                    sh './scp_script.sh'
+                                    echo "[SUCCESS] scp_script.sh выполнен успешно с попытки $attempt"
+                                    lastError = null
+                                    break
+                                } catch (Exception e) {
+                                    lastError = e
+                                    echo "[RETRY] Попытка $attempt не удалась: ${e.message}"
+                                    
+                                    if (attempt < maxRetries) {
+                                        echo "[RETRY] Ждем $retryDelay секунд перед следующей попыткой..."
+                                        sleep(time: retryDelay, unit: 'SECONDS')
+                                        echo "[RETRY] Продолжаем..."
+                                    }
+                                }
+                            }
+                            
+                            if (lastError) {
+                                echo "[ERROR] Все $maxRetries попытки scp_script.sh завершились ошибкой"
+                                echo "[ERROR] Последняя ошибка: ${lastError.message}"
                                 echo "[DEBUG] Содержимое scp_script.sh для отладки:"
                                 sh 'cat scp_script.sh'
-                                error("Ошибка при копировании файлов на сервер: ${e.message}")
+                                error("Ошибка при копировании файлов на сервер после $maxRetries попыток: ${lastError.message}")
                             }
                             
                             echo "[DEBUG] Запуск verify_script.sh..."

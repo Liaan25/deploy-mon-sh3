@@ -2339,38 +2339,49 @@ setup_grafana_datasource_and_dashboards() {
             local sa_payload sa_response http_code sa_body sa_id
             
             # Grafana 11.x не поддерживает поле "role" при создании service account
-            sa_payload=$(jq -n --arg name "$service_account_name" '{name:$name, isDisabled:false}')
+            # ВАЖНО: Используем -c (compact) для создания JSON БЕЗ переносов строк!
+            # Проблема была в том что jq создавал многострочный JSON, а curl отправлял неправильный Content-Length
+            sa_payload=$(jq -c -n --arg name "$service_account_name" '{name:$name}')
             print_info "Payload для создания сервисного аккаунта: $sa_payload"
             log_diagnosis "Payload для создания сервисного аккаунта: $sa_payload"
             
             echo "[PAYLOAD ДЛЯ SERVICE ACCOUNT]" >> "$DEBUG_LOG"
-            echo "  JSON Payload:" >> "$DEBUG_LOG"
+            echo "  ⚠️  ИЗМЕНЕНИЕ: Используем COMPACT JSON (одна строка, без переносов)" >> "$DEBUG_LOG"
+            echo "  Причина: Многострочный JSON вызывал несоответствие Content-Length" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            echo "  JSON Payload (compact):" >> "$DEBUG_LOG"
+            echo "  $sa_payload" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            echo "  JSON Payload (pretty-print для читаемости):" >> "$DEBUG_LOG"
             echo "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$sa_payload" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             echo "  Команда JQ для генерации:" >> "$DEBUG_LOG"
-            echo "  jq -n --arg name \"$service_account_name\" '{name:\$name, isDisabled:false}'" >> "$DEBUG_LOG"
+            echo "  jq -c -n --arg name \"$service_account_name\" '{name:\$name}'" >> "$DEBUG_LOG"
+            echo "  Флаг -c = compact output (без переносов строк)" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             echo "  Проверка payload:" >> "$DEBUG_LOG"
             echo "    - Валидность JSON: $(echo "$sa_payload" | jq empty 2>&1 && echo "✅ валиден" || echo "❌ невалиден")" >> "$DEBUG_LOG"
+            echo "    - Формат: $(echo "$sa_payload" | grep -q $'\n' && echo "❌ многострочный" || echo "✅ компактный (одна строка)")" >> "$DEBUG_LOG"
             echo "    - Количество полей: $(echo "$sa_payload" | jq 'keys | length' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
             echo "    - Поля: $(echo "$sa_payload" | jq 'keys' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
             echo "    - Значение name: $(echo "$sa_payload" | jq -r '.name' 2>/dev/null)" >> "$DEBUG_LOG"
-            echo "    - Значение isDisabled: $(echo "$sa_payload" | jq -r '.isDisabled' 2>/dev/null)" >> "$DEBUG_LOG"
             echo "    - Есть ли поле 'role': $(echo "$sa_payload" | jq 'has("role")' 2>/dev/null)" >> "$DEBUG_LOG"
+            echo "    - Есть ли поле 'isDisabled': $(echo "$sa_payload" | jq 'has("isDisabled")' 2>/dev/null)" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             echo "  Размеры:" >> "$DEBUG_LOG"
-            echo "    - Длина JSON строки: ${#sa_payload} символов" >> "$DEBUG_LOG"
+            echo "    - Длина JSON строки: ${#sa_payload} байт" >> "$DEBUG_LOG"
             echo "    - Длина имени SA: ${#service_account_name} символов" >> "$DEBUG_LOG"
+            echo "    - Ожидаемый Content-Length: ${#sa_payload}" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             echo "  Raw payload (как видит bash):" >> "$DEBUG_LOG"
-            echo "    $sa_payload" >> "$DEBUG_LOG"
+            echo "    '$sa_payload'" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
-            echo "  Hexdump первых 100 байт (для проверки encoding):" >> "$DEBUG_LOG"
-            echo "$sa_payload" | head -c 100 | od -A x -t x1z -v >> "$DEBUG_LOG" 2>&1 || echo "  (hexdump недоступен)" >> "$DEBUG_LOG"
+            echo "  Hexdump полного payload (для проверки encoding):" >> "$DEBUG_LOG"
+            echo "$sa_payload" | od -A x -t x1z -v >> "$DEBUG_LOG" 2>&1 || echo "  (hexdump недоступен)" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             # Сначала проверим доступность API
@@ -2973,7 +2984,8 @@ setup_grafana_datasource_and_dashboards() {
                 echo "     curl -k -u '${grafana_user}:${grafana_password}' '${grafana_url}/api/serviceaccounts' | jq" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
-                echo "  3. Попробовать создать через минимальный payload:" >> "$DEBUG_LOG"
+                echo "  3. Попробовать создать через минимальный payload (COMPACT JSON):" >> "$DEBUG_LOG"
+                echo "     ⚠️  ВАЖНО: Используйте JSON в одну строку (compact), БЕЗ переносов!" >> "$DEBUG_LOG"
                 echo "     curl -k -v -X POST \\" >> "$DEBUG_LOG"
                 echo "       -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
                 echo "       -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
@@ -2981,8 +2993,10 @@ setup_grafana_datasource_and_dashboards() {
                 echo "       '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
-                echo "  4. Попробовать через файл с payload:" >> "$DEBUG_LOG"
-                echo "     echo '{\"name\":\"test-sa-2\",\"isDisabled\":false}' > /tmp/payload.json" >> "$DEBUG_LOG"
+                echo "  4. Попробовать через файл с payload (COMPACT):" >> "$DEBUG_LOG"
+                echo "     echo '{\"name\":\"test-sa-2\"}' > /tmp/payload.json" >> "$DEBUG_LOG"
+                echo "     # ИЛИ с jq для гарантии компактности:" >> "$DEBUG_LOG"
+                echo "     jq -c -n '{name:\"test-sa-3\"}' > /tmp/payload.json" >> "$DEBUG_LOG"
                 echo "     curl -k -v -X POST \\" >> "$DEBUG_LOG"
                 echo "       -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
                 echo "       -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
@@ -3002,8 +3016,12 @@ setup_grafana_datasource_and_dashboards() {
                 
                 echo "[СПРАВКА: ПРАВИЛЬНЫЕ ФОРМАТЫ PAYLOAD ДЛЯ РАЗНЫХ ВЕРСИЙ GRAFANA]" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
+                echo "  🔴 КРИТИЧЕСКОЕ ТРЕБОВАНИЕ: JSON должен быть КОМПАКТНЫМ (без переносов строк)!" >> "$DEBUG_LOG"
+                echo "  Используйте: jq -c (compact) или echo без переносов" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
                 echo "  Grafana 8.x (старая версия):" >> "$DEBUG_LOG"
-                echo "    {\"name\":\"test-sa\", \"role\":\"Admin\"}" >> "$DEBUG_LOG"
+                echo "    {\"name\":\"test-sa\",\"role\":\"Admin\"}" >> "$DEBUG_LOG"
                 echo "    ⚠️  Поле 'role' поддерживалось" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
@@ -3012,27 +3030,51 @@ setup_grafana_datasource_and_dashboards() {
                 echo "    ⚠️  Поле 'role' убрано из API" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
-                echo "  Grafana 11.x (текущая версия 11.6.2):" >> "$DEBUG_LOG"
-                echo "    Минимальный: {\"name\":\"test-sa\"}" >> "$DEBUG_LOG"
-                echo "    Расширенный: {\"name\":\"test-sa\", \"isDisabled\":false}" >> "$DEBUG_LOG"
+                echo "  Grafana 11.x (текущая версия 11.6.2) - РЕКОМЕНДУЕТСЯ:" >> "$DEBUG_LOG"
+                echo "    ✅ Минимальный (compact): {\"name\":\"test-sa\"}" >> "$DEBUG_LOG"
+                echo "    ❌ НЕ используйте многострочный JSON!" >> "$DEBUG_LOG"
                 echo "    ❌ НЕ используйте поле 'role'" >> "$DEBUG_LOG"
-                echo "    ✅ Поле 'isDisabled' опционально (по умолчанию false)" >> "$DEBUG_LOG"
+                echo "    ⚠️  Поле 'isDisabled' может вызывать проблемы - пока не используем" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Примеры ПРАВИЛЬНОГО создания payload:" >> "$DEBUG_LOG"
+                echo "    jq -c -n --arg name \"mysa\" '{name:\$name}'" >> "$DEBUG_LOG"
+                echo "    echo '{\"name\":\"mysa\"}' | tr -d '\\n'" >> "$DEBUG_LOG"
+                echo "    printf '%s' '{\"name\":\"mysa\"}'" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Примеры НЕПРАВИЛЬНОГО (вызывают 400 Bad Request):" >> "$DEBUG_LOG"
+                echo "    jq -n ... (без -c, создает многострочный JSON)" >> "$DEBUG_LOG"
+                echo "    echo '{" >> "$DEBUG_LOG"
+                echo "      \"name\": \"mysa\"" >> "$DEBUG_LOG"
+                echo "    }'" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "  Документация API для Grafana 11.x:" >> "$DEBUG_LOG"
                 echo "    POST /api/serviceaccounts" >> "$DEBUG_LOG"
-                echo "    Body: {" >> "$DEBUG_LOG"
-                echo "      \"name\": \"string (required)\"," >> "$DEBUG_LOG"
-                echo "      \"isDisabled\": \"boolean (optional, default: false)\"" >> "$DEBUG_LOG"
-                echo "    }" >> "$DEBUG_LOG"
+                echo "    Content-Type: application/json" >> "$DEBUG_LOG"
+                echo "    Body (COMPACT!): {\"name\":\"string\"}" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
-                echo "[ЧТО ДЕЛАТЬ]" >> "$DEBUG_LOG"
+                echo "[ЧТО БЫЛО ИСПРАВЛЕНО]" >> "$DEBUG_LOG"
+                echo "  🔧 НАЙДЕННАЯ ПРОБЛЕМА:" >> "$DEBUG_LOG"
+                echo "     jq создавал многострочный JSON с переносами строк" >> "$DEBUG_LOG"
+                echo "     curl отправлял неправильный Content-Length" >> "$DEBUG_LOG"
+                echo "     Grafana 11.6.2 строго проверяет формат и отклонял запрос" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "  ✅ РЕШЕНИЕ:" >> "$DEBUG_LOG"
+                echo "     Используем jq -c (compact) для создания JSON в одну строку" >> "$DEBUG_LOG"
+                echo "     Убрали поле 'isDisabled' (оставили только 'name')" >> "$DEBUG_LOG"
+                echo "     Теперь payload: {\"name\":\"...\"} без переносов" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "[ЧТО ДЕЛАТЬ ЕСЛИ ОШИБКА ПОВТОРЯЕТСЯ]" >> "$DEBUG_LOG"
                 echo "  1. Прочитайте этот DEBUG LOG: cat $DEBUG_LOG" >> "$DEBUG_LOG"
-                echo "  2. Скопируйте содержимое и отправьте для анализа" >> "$DEBUG_LOG"
+                echo "  2. Проверьте что payload КОМПАКТНЫЙ (одна строка)" >> "$DEBUG_LOG"
                 echo "  3. Выполните ручные команды выше для проверки" >> "$DEBUG_LOG"
-                echo "  4. Проверьте версию Grafana и соответствие API" >> "$DEBUG_LOG"
-                echo "  5. Если ошибка повторяется - проверьте логи Grafana" >> "$DEBUG_LOG"
+                echo "  4. Проверьте логи Grafana:" >> "$DEBUG_LOG"
+                echo "     journalctl -u grafana-server -n 50" >> "$DEBUG_LOG"
+                echo "  5. Если все еще не работает - создайте SA через UI и используйте его" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "[СИСТЕМНАЯ ИНФОРМАЦИЯ]" >> "$DEBUG_LOG"

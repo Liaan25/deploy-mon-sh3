@@ -170,11 +170,9 @@ pipeline {
                         echo "[DIAG] Проверка порта 22 (SSH) на ''' + params.SERVER_ADDRESS + ''':"
                         if command -v nc >/dev/null 2>&1; then
                             timeout 5 nc -zv ''' + params.SERVER_ADDRESS + ''' 22 2>&1 && echo "[OK] Порт 22 открыт" || echo "[WARNING] Порт 22 закрыт/недоступен (может быть ограничение для clearAgent)"
-                        elif command -v telnet >/dev/null 2>&1; then
-                            timeout 3 bash -c "echo > /dev/tcp/''' + params.SERVER_ADDRESS + '''/22" 2>/dev/null && echo "[OK] Порт 22 открыт" || echo "[WARNING] Порт 22 закрыт/недоступен"
                         else
-                            echo "[DIAG] Команды nc/telnet не найдены, используем curl:"
-                            curl -s --connect-timeout 5 telnet://''' + params.SERVER_ADDRESS + ''':22 2>&1 | head -1 || echo "[DIAG] Не удалось проверить порт"
+                            echo "[DIAG] nc не найден, пропускаем проверку порта"
+                            echo "[INFO] Проверка SSH будет выполнена на этапе CDL с агента masterLin"
                         fi
                         echo ""
                         

@@ -1,6 +1,6 @@
 ﻿pipeline {
     agent none
-    
+
     parameters {
         string(name: "SERVER_ADDRESS", defaultValue: "", description: "Адрес сервера для подключения по SSH")
         string(name: "SSH_CREDENTIALS_ID", defaultValue: "", description: "ID Jenkins Credentials (SSH Username with private key)")
@@ -19,16 +19,16 @@
         booleanParam(name: "SKIP_VAULT_INSTALL", defaultValue: false, description: "Пропустить установку Vault через RLM")
     }
     
-    environment {
-        DATE_INSTALL = sh(script: "date '+%Y%m%d_%H%M%S'", returnStdout: true).trim()
-    }
-    
+
     stages {
         // CI ЭТАП: Подготовка и диагностика (можно на clearAgent)
         stage("CI: Подготовка и диагностика") {
             agent { label "clearAgent&&sbel8&&!static" }
             steps {
                 script {
+                    // Вычисляем DATE_INSTALL здесь, где есть контекст агента
+                    env.DATE_INSTALL = sh(script: "date '+%Y%m%d_%H%M%S'", returnStdout: true).trim()
+                    
                     echo "================================================"
                     echo "=== НАЧАЛО ПАЙПЛАЙНА С ОТЛАДКОЙ ==="
                     echo "================================================"
@@ -36,6 +36,7 @@
                     echo "[DEBUG] Номер билда: ${currentBuild.number}"
                     echo "[DEBUG] Workspace: ${env.WORKSPACE}"
                     echo "[DEBUG] Путь: ${pwd()}"
+                    echo "[DEBUG] DATE_INSTALL: ${env.DATE_INSTALL}"
                     
                     // Очистка workspace
                     echo "[DEBUG] Очистка workspace..."
@@ -80,6 +81,7 @@
                     echo "=== CDL ЭТАП: РАЗВЕРТЫВАНИЕ ==="
                     echo "================================================"
                     echo "[DEBUG] Агент: ${env.NODE_NAME}"
+                    echo "[DEBUG] DATE_INSTALL: ${env.DATE_INSTALL}"
                     
                     // SSH тест
                     withCredentials([
@@ -117,7 +119,7 @@
             }
         }
     }
-    
+
     post {
         success {
             echo "================================================"

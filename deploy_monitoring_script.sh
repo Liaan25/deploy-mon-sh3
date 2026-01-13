@@ -2339,32 +2339,37 @@ setup_grafana_datasource_and_dashboards() {
             local sa_payload sa_response http_code sa_body sa_id
             
             # Grafana 11.x не поддерживает поле "role" при создании service account
-            # ВАЖНО: Используем -c (compact) для создания JSON БЕЗ переносов строк!
-            # Проблема была в том что jq создавал многострочный JSON, а curl отправлял неправильный Content-Length
-            sa_payload=$(jq -c -n --arg name "$service_account_name" '{name:$name}')
+            # ВАЖНО: 
+            # 1. Используем -c (compact) для создания JSON БЕЗ переносов строк
+            # 2. Используем tr -d '\n' чтобы убрать trailing newline от jq
+            # 3. Проблема: jq добавляет \n в конец, что вызывает несоответствие Content-Length
+            sa_payload=$(jq -c -n --arg name "$service_account_name" '{name:$name}' | tr -d '\n')
             print_info "Payload для создания сервисного аккаунта: $sa_payload"
             log_diagnosis "Payload для создания сервисного аккаунта: $sa_payload"
             
             echo "[PAYLOAD ДЛЯ SERVICE ACCOUNT]" >> "$DEBUG_LOG"
-            echo "  ⚠️  ИЗМЕНЕНИЕ: Используем COMPACT JSON (одна строка, без переносов)" >> "$DEBUG_LOG"
-            echo "  Причина: Многострочный JSON вызывал несоответствие Content-Length" >> "$DEBUG_LOG"
+            echo "  🔧 КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ:" >> "$DEBUG_LOG"
+            echo "    1. Используем jq -c для compact JSON (одна строка)" >> "$DEBUG_LOG"
+            echo "    2. Используем tr -d '\\n' чтобы убрать trailing newline от jq" >> "$DEBUG_LOG"
+            echo "    3. Сохраняем в файл и используем curl --data-binary @file" >> "$DEBUG_LOG"
+            echo "       (избегаем проблем с экранированием кавычек в bash)" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
-            echo "  JSON Payload (compact):" >> "$DEBUG_LOG"
+            echo "  JSON Payload (compact, no trailing newline):" >> "$DEBUG_LOG"
             echo "  $sa_payload" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             echo "  JSON Payload (pretty-print для читаемости):" >> "$DEBUG_LOG"
             echo "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$sa_payload" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             echo "  Команда JQ для генерации:" >> "$DEBUG_LOG"
-            echo "  jq -c -n --arg name \"$service_account_name\" '{name:\$name}'" >> "$DEBUG_LOG"
-            echo "  Флаг -c = compact output (без переносов строк)" >> "$DEBUG_LOG"
+            echo "  jq -c -n --arg name \"$service_account_name\" '{name:\$name}' | tr -d '\\n'" >> "$DEBUG_LOG"
+            echo "  -c = compact output, tr -d '\\n' = убрать trailing newline" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             echo "  Проверка payload:" >> "$DEBUG_LOG"
             echo "    - Валидность JSON: $(echo "$sa_payload" | jq empty 2>&1 && echo "✅ валиден" || echo "❌ невалиден")" >> "$DEBUG_LOG"
-            echo "    - Формат: $(echo "$sa_payload" | grep -q $'\n' && echo "❌ многострочный" || echo "✅ компактный (одна строка)")" >> "$DEBUG_LOG"
+            echo "    - Формат: $(echo "$sa_payload" | grep -q $'\n' && echo "❌ содержит newline!" || echo "✅ компактный, без newline")" >> "$DEBUG_LOG"
             echo "    - Количество полей: $(echo "$sa_payload" | jq 'keys | length' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
-            echo "    - Поля: $(echo "$sa_payload" | jq 'keys' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
+            echo "    - Поля: $(echo "$sa_payload" | jq -c 'keys' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
             echo "    - Значение name: $(echo "$sa_payload" | jq -r '.name' 2>/dev/null)" >> "$DEBUG_LOG"
             echo "    - Есть ли поле 'role': $(echo "$sa_payload" | jq 'has("role")' 2>/dev/null)" >> "$DEBUG_LOG"
             echo "    - Есть ли поле 'isDisabled': $(echo "$sa_payload" | jq 'has("isDisabled")' 2>/dev/null)" >> "$DEBUG_LOG"
@@ -2373,15 +2378,21 @@ setup_grafana_datasource_and_dashboards() {
             echo "  Размеры:" >> "$DEBUG_LOG"
             echo "    - Длина JSON строки: ${#sa_payload} байт" >> "$DEBUG_LOG"
             echo "    - Длина имени SA: ${#service_account_name} символов" >> "$DEBUG_LOG"
-            echo "    - Ожидаемый Content-Length: ${#sa_payload}" >> "$DEBUG_LOG"
+            echo "    - Ожидаемый Content-Length в HTTP: ${#sa_payload}" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             echo "  Raw payload (как видит bash):" >> "$DEBUG_LOG"
             echo "    '$sa_payload'" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
-            echo "  Hexdump полного payload (для проверки encoding):" >> "$DEBUG_LOG"
+            echo "  Hexdump полного payload (проверка на trailing bytes):" >> "$DEBUG_LOG"
             echo "$sa_payload" | od -A x -t x1z -v >> "$DEBUG_LOG" 2>&1 || echo "  (hexdump недоступен)" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
+            echo "  Payload сохранен во временный файл для curl:" >> "$DEBUG_LOG"
+            echo "    Файл: $payload_file" >> "$DEBUG_LOG"
+            echo "    Размер файла: $(wc -c < "$payload_file" 2>/dev/null || echo "?") байт" >> "$DEBUG_LOG"
+            echo "    MD5 hash: $(md5sum "$payload_file" 2>/dev/null | awk '{print $1}' || echo "?")" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             # Сначала проверим доступность API
@@ -2454,12 +2465,22 @@ setup_grafana_datasource_and_dashboards() {
                 fi
             fi
             
+            # КРИТИЧЕСКИ ВАЖНО: Сохраняем payload в файл, чтобы избежать проблем с экранированием кавычек!
+            # Проблема: -d "$sa_payload" с JSON внутри вызывает неправильный парсинг кавычек bash
+            # Решение: используем --data-binary @file для передачи данных
+            local payload_file="/tmp/grafana_sa_payload_$$.json"
+            printf '%s' "$sa_payload" > "$payload_file"
+            
+            # Гарантируем удаление временного файла при выходе из функции
+            trap "rm -f '$payload_file' 2>/dev/null" RETURN
+            
             # Вариант 3: Сначала пробуем без сертификатов, потом с ними
+            # ВАЖНО: используем '@файл' вместо прямой передачи JSON строки
             local curl_cmd_without_cert="curl -k -s -w \"\n%{http_code}\" \
                 -X POST \
                 -H \"Content-Type: application/json\" \
                 -u \"${grafana_user}:${grafana_password}\" \
-                -d \"$sa_payload\" \
+                --data-binary \"@${payload_file}\" \
                 \"${grafana_url}/api/serviceaccounts\""
             
             local curl_cmd_with_cert=""
@@ -2470,7 +2491,7 @@ setup_grafana_datasource_and_dashboards() {
                     -X POST \
                     -H \"Content-Type: application/json\" \
                     -u \"${grafana_user}:${grafana_password}\" \
-                    -d \"$sa_payload\" \
+                    --data-binary \"@${payload_file}\" \
                     \"${grafana_url}/api/serviceaccounts\""
             fi
             
@@ -2523,25 +2544,33 @@ setup_grafana_datasource_and_dashboards() {
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "  [КОМАНДА ДЛЯ РУЧНОГО ВОСПРОИЗВЕДЕНИЯ]" >> "$DEBUG_LOG"
-                echo "  Скопируйте и выполните эту команду для проверки:" >> "$DEBUG_LOG"
+                echo "  🔧 Рекомендуется использовать payload через файл:" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "  # Создайте файл с payload:" >> "$DEBUG_LOG"
+                echo "  printf '%s' '$sa_payload' > /tmp/grafana_payload.json" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 if [[ "$use_cert" == "with_cert" ]]; then
-                    echo "curl -k -v -w '\\n%{http_code}' \\" >> "$DEBUG_LOG"
-                    echo "  --cert '/opt/vault/certs/grafana-client.crt' \\" >> "$DEBUG_LOG"
-                    echo "  --key '/opt/vault/certs/grafana-client.key' \\" >> "$DEBUG_LOG"
-                    echo "  -X POST \\" >> "$DEBUG_LOG"
-                    echo "  -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
-                    echo "  -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
-                    echo "  -d '$sa_payload' \\" >> "$DEBUG_LOG"
-                    echo "  '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
+                    echo "  # Отправьте запрос:" >> "$DEBUG_LOG"
+                    echo "  curl -k -v -w '\\n%{http_code}' \\" >> "$DEBUG_LOG"
+                    echo "    --cert '/opt/vault/certs/grafana-client.crt' \\" >> "$DEBUG_LOG"
+                    echo "    --key '/opt/vault/certs/grafana-client.key' \\" >> "$DEBUG_LOG"
+                    echo "    -X POST \\" >> "$DEBUG_LOG"
+                    echo "    -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
+                    echo "    -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
+                    echo "    --data-binary '@/tmp/grafana_payload.json' \\" >> "$DEBUG_LOG"
+                    echo "    '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
                 else
-                    echo "curl -k -v -w '\\n%{http_code}' \\" >> "$DEBUG_LOG"
-                    echo "  -X POST \\" >> "$DEBUG_LOG"
-                    echo "  -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
-                    echo "  -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
-                    echo "  -d '$sa_payload' \\" >> "$DEBUG_LOG"
-                    echo "  '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
+                    echo "  # Отправьте запрос:" >> "$DEBUG_LOG"
+                    echo "  curl -k -v -w '\\n%{http_code}' \\" >> "$DEBUG_LOG"
+                    echo "    -X POST \\" >> "$DEBUG_LOG"
+                    echo "    -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
+                    echo "    -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
+                    echo "    --data-binary '@/tmp/grafana_payload.json' \\" >> "$DEBUG_LOG"
+                    echo "    '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
                 fi
+                echo "" >> "$DEBUG_LOG"
+                echo "  ⚠️  ВАЖНО: printf '%s' гарантирует отсутствие trailing newline!" >> "$DEBUG_LOG"
+                echo "  ⚠️  --data-binary '@файл' избегает проблем с экранированием кавычек" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "  Request Payload:" >> "$DEBUG_LOG"
@@ -2655,22 +2684,23 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "Тело ответа (сырое): $body"
                 log_diagnosis "Время получения ответа: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
                 
-                # Логируем ответ для диагностики
-                print_info "Ответ API создания сервисного аккаунта: HTTP $code"
-                print_info "Тело ответа (первые 200 символов): $(echo "$body" | head -c 200)"
+                # Логируем ответ для диагностики (ВАЖНО: выводим в stderr!)
+                echo "[INFO] Ответ API создания сервисного аккаунта: HTTP $code" >&2
+                echo "[INFO] Тело ответа (первые 200 символов): $(echo "$body" | head -c 200)" >&2
                 
-                # Детальное логирование при ошибках
+                # Детальное логирование при ошибках (ВАЖНО: выводим в stderr!)
                 if [[ "$code" != "200" && "$code" != "201" && "$code" != "409" ]]; then
-                    print_warning "Ошибка API при создании сервисного аккаунта"
-                    print_info "Полный ответ:"
-                    echo "$response"
-                    print_info "Тело ответа (первые 500 символов):"
-                    echo "$body" | head -c 500
-                    echo
+                    echo "[WARNING] Ошибка API при создании сервисного аккаунта" >&2
+                    echo "[INFO] Полный ответ:" >&2
+                    echo "$response" >&2
+                    echo "[INFO] Тело ответа (первые 500 символов):" >&2
+                    echo "$body" | head -c 500 >&2
+                    echo "" >&2
                 fi
                 
-                # Возвращаем код и тело
-                echo "$code:$body:$response"
+                # Возвращаем код и тело через stdout
+                # ВАЖНО: Используем редкий разделитель ||| вместо : (в JSON есть двоеточия!)
+                echo "${code}|||${body}|||${response}"
                 return 0
             }
             
@@ -2684,9 +2714,10 @@ setup_grafana_datasource_and_dashboards() {
                 return 2
             fi
             
-            http_code=$(echo "$attempt1_result" | cut -d: -f1)
-            sa_body=$(echo "$attempt1_result" | cut -d: -f2)
-            sa_response=$(echo "$attempt1_result" | cut -d: -f3-)
+            # Парсим результат с разделителем ||| (более надежный чем :)
+            http_code=$(echo "$attempt1_result" | awk -F'|||' '{print $1}')
+            sa_body=$(echo "$attempt1_result" | awk -F'|||' '{print $2}')
+            sa_response=$(echo "$attempt1_result" | awk -F'|||' '{print $3}')
             
             # Проверяем результат первой попытки
             if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "409" ]]; then
@@ -2738,9 +2769,9 @@ setup_grafana_datasource_and_dashboards() {
                         return 2
                     fi
                     
-                    http_code=$(echo "$localhost_result" | cut -d: -f1)
-                    sa_body=$(echo "$localhost_result" | cut -d: -f2)
-                    sa_response=$(echo "$localhost_result" | cut -d: -f3-)
+                    http_code=$(echo "$localhost_result" | awk -F'|||' '{print $1}')
+                    sa_body=$(echo "$localhost_result" | awk -F'|||' '{print $2}')
+                    sa_response=$(echo "$localhost_result" | awk -F'|||' '{print $3}')
                     
                     # Возвращаем оригинальный URL
                     grafana_url="$original_grafana_url_for_fallback"
@@ -2769,9 +2800,9 @@ setup_grafana_datasource_and_dashboards() {
                             return 2
                         fi
                         
-                        http_code=$(echo "$attempt2_result" | cut -d: -f1)
-                        sa_body=$(echo "$attempt2_result" | cut -d: -f2)
-                        sa_response=$(echo "$attempt2_result" | cut -d: -f3-)
+                        http_code=$(echo "$attempt2_result" | awk -F'|||' '{print $1}')
+                        sa_body=$(echo "$attempt2_result" | awk -F'|||' '{print $2}')
+                        sa_response=$(echo "$attempt2_result" | awk -F'|||' '{print $3}')
                     else
                         print_info "Команда с сертификатами недоступна, пропускаем вторую попытку"
                         log_diagnosis "⚠️  Команда с сертификатами недоступна"
@@ -3037,10 +3068,19 @@ setup_grafana_datasource_and_dashboards() {
                 echo "    ⚠️  Поле 'isDisabled' может вызывать проблемы - пока не используем" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
-                echo "  Примеры ПРАВИЛЬНОГО создания payload:" >> "$DEBUG_LOG"
-                echo "    jq -c -n --arg name \"mysa\" '{name:\$name}'" >> "$DEBUG_LOG"
-                echo "    echo '{\"name\":\"mysa\"}' | tr -d '\\n'" >> "$DEBUG_LOG"
-                echo "    printf '%s' '{\"name\":\"mysa\"}'" >> "$DEBUG_LOG"
+                echo "  Примеры ПРАВИЛЬНОГО создания и отправки payload:" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "    # Вариант 1: jq -c с tr (удаляет trailing newline):" >> "$DEBUG_LOG"
+                echo "    jq -c -n --arg name \"mysa\" '{name:\$name}' | tr -d '\\n' > /tmp/p.json" >> "$DEBUG_LOG"
+                echo "    curl ... --data-binary '@/tmp/p.json' ..." >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "    # Вариант 2: printf (РЕКОМЕНДУЕТСЯ, нет newline):" >> "$DEBUG_LOG"
+                echo "    printf '%s' '{\"name\":\"mysa\"}' > /tmp/p.json" >> "$DEBUG_LOG"
+                echo "    curl ... --data-binary '@/tmp/p.json' ..." >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "    # Вариант 3: echo -n (без newline):" >> "$DEBUG_LOG"
+                echo "    echo -n '{\"name\":\"mysa\"}' > /tmp/p.json" >> "$DEBUG_LOG"
+                echo "    curl ... --data-binary '@/tmp/p.json' ..." >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "  Примеры НЕПРАВИЛЬНОГО (вызывают 400 Bad Request):" >> "$DEBUG_LOG"
@@ -3056,16 +3096,31 @@ setup_grafana_datasource_and_dashboards() {
                 echo "    Body (COMPACT!): {\"name\":\"string\"}" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
-                echo "[ЧТО БЫЛО ИСПРАВЛЕНО]" >> "$DEBUG_LOG"
-                echo "  🔧 НАЙДЕННАЯ ПРОБЛЕМА:" >> "$DEBUG_LOG"
-                echo "     jq создавал многострочный JSON с переносами строк" >> "$DEBUG_LOG"
-                echo "     curl отправлял неправильный Content-Length" >> "$DEBUG_LOG"
-                echo "     Grafana 11.6.2 строго проверяет формат и отклонял запрос" >> "$DEBUG_LOG"
+                echo "[ЧТО БЫЛО ИСПРАВЛЕНО - ФИНАЛЬНАЯ ВЕРСИЯ]" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
-                echo "  ✅ РЕШЕНИЕ:" >> "$DEBUG_LOG"
-                echo "     Используем jq -c (compact) для создания JSON в одну строку" >> "$DEBUG_LOG"
-                echo "     Убрали поле 'isDisabled' (оставили только 'name')" >> "$DEBUG_LOG"
-                echo "     Теперь payload: {\"name\":\"...\"} без переносов" >> "$DEBUG_LOG"
+                echo "  🔧 ПРОБЛЕМА #1: Многострочный JSON" >> "$DEBUG_LOG"
+                echo "     - jq по умолчанию создавал JSON с переносами строк" >> "$DEBUG_LOG"
+                echo "     - Grafana 11.6.2 строго проверяет формат" >> "$DEBUG_LOG"
+                echo "  ✅ РЕШЕНИЕ #1: jq -c (compact output)" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  🔧 ПРОБЛЕМА #2: Trailing newline" >> "$DEBUG_LOG"
+                echo "     - jq -c добавлял \\n в конец строки" >> "$DEBUG_LOG"
+                echo "     - Это вызывало несоответствие Content-Length" >> "$DEBUG_LOG"
+                echo "  ✅ РЕШЕНИЕ #2: | tr -d '\\n' (убираем newline)" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  🔧 ПРОБЛЕМА #3: Экранирование кавычек в bash" >> "$DEBUG_LOG"
+                echo "     - curl -d \"\$payload\" с JSON внутри" >> "$DEBUG_LOG"
+                echo "     - bash неправильно парсил двойные кавычки внутри двойных" >> "$DEBUG_LOG"
+                echo "     - Content-Length был 41 вместо 45 байт!" >> "$DEBUG_LOG"
+                echo "  ✅ РЕШЕНИЕ #3: Сохраняем в файл + curl --data-binary '@file'" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  📋 ИТОГОВОЕ РЕШЕНИЕ:" >> "$DEBUG_LOG"
+                echo "     1. jq -c -n ... | tr -d '\\n' > file" >> "$DEBUG_LOG"
+                echo "     2. curl --data-binary '@file' ..." >> "$DEBUG_LOG"
+                echo "     3. Payload: {\"name\":\"...\"} (только name, без isDisabled)" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "[ЧТО ДЕЛАТЬ ЕСЛИ ОШИБКА ПОВТОРЯЕТСЯ]" >> "$DEBUG_LOG"
@@ -3145,9 +3200,9 @@ setup_grafana_datasource_and_dashboards() {
             local attempt1_result
             attempt1_result=$(execute_token_request "$curl_cmd_without_cert" "false")
             
-            token_code=$(echo "$attempt1_result" | cut -d: -f1)
-            token_body=$(echo "$attempt1_result" | cut -d: -f2)
-            token_response=$(echo "$attempt1_result" | cut -d: -f3-)
+            token_code=$(echo "$attempt1_result" | awk -F'|||' '{print $1}')
+            token_body=$(echo "$attempt1_result" | awk -F'|||' '{print $2}')
+            token_response=$(echo "$attempt1_result" | awk -F'|||' '{print $3}')
             
             # Проверяем результат первой попытки
             if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
@@ -3171,9 +3226,9 @@ setup_grafana_datasource_and_dashboards() {
                     local attempt2_result
                     attempt2_result=$(execute_token_request "$curl_cmd_with_cert" "true")
                     
-                    token_code=$(echo "$attempt2_result" | cut -d: -f1)
-                    token_body=$(echo "$attempt2_result" | cut -d: -f2)
-                    token_response=$(echo "$attempt2_result" | cut -d: -f3-)
+                    token_code=$(echo "$attempt2_result" | awk -F'|||' '{print $1}')
+                    token_body=$(echo "$attempt2_result" | awk -F'|||' '{print $2}')
+                    token_response=$(echo "$attempt2_result" | awk -F'|||' '{print $3}')
                     
                     if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
                         print_success "Создание токена с сертификатами успешно (HTTP $token_code)"

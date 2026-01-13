@@ -2191,6 +2191,18 @@ setup_grafana_datasource_and_dashboards() {
         
         # Функция для создания сервисного аккаунта через API (исправленная версия)
         create_service_account_via_api() {
+            # ============================================================================
+            # ДЕТАЛЬНЫЙ DEBUG ЛОГ - ВСЯ ИНФОРМАЦИЯ О ЗАПРОСЕ К GRAFANA API
+            # ============================================================================
+            local DEBUG_LOG="/tmp/debug_grafana_key.log"
+            
+            # Очищаем старый лог и создаем новый
+            echo "================================================================================" > "$DEBUG_LOG"
+            echo "DEBUG LOG: Создание Service Account в Grafana" >> "$DEBUG_LOG"
+            echo "Дата и время: $(date '+%Y-%m-%d %H:%M:%S %Z')" >> "$DEBUG_LOG"
+            echo "================================================================================" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
             # Проверяем, нужно ли использовать localhost вместо доменного имени
             local original_grafana_url="$grafana_url"
             if [[ "${USE_GRAFANA_LOCALHOST:-false}" == "true" ]]; then
@@ -2199,7 +2211,104 @@ setup_grafana_datasource_and_dashboards() {
                 echo "DEBUG_LOCALHOST: Используем localhost вместо доменного имени" >&2
                 echo "DEBUG_LOCALHOST: Было: $original_grafana_url" >&2
                 echo "DEBUG_LOCALHOST: Стало: $grafana_url" >&2
+                
+                echo "[LOCALHOST REDIRECT]" >> "$DEBUG_LOG"
+                echo "  Оригинальный URL: $original_grafana_url" >> "$DEBUG_LOG"
+                echo "  Изменен на: $grafana_url" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
             fi
+            
+            # ВХОДНЫЕ ПАРАМЕТРЫ
+            echo "[ВХОДНЫЕ ПАРАМЕТРЫ]" >> "$DEBUG_LOG"
+            echo "  service_account_name: '$service_account_name'" >> "$DEBUG_LOG"
+            echo "  grafana_url: '$grafana_url'" >> "$DEBUG_LOG"
+            echo "  grafana_user: '$grafana_user'" >> "$DEBUG_LOG"
+            echo "  grafana_password: '$(echo "$grafana_password" | sed 's/./*/g')' (длина: ${#grafana_password})" >> "$DEBUG_LOG"
+            echo "  GRAFANA_PORT: ${GRAFANA_PORT}" >> "$DEBUG_LOG"
+            echo "  SERVER_DOMAIN: ${SERVER_DOMAIN}" >> "$DEBUG_LOG"
+            echo "  USE_GRAFANA_LOCALHOST: ${USE_GRAFANA_LOCALHOST:-false}" >> "$DEBUG_LOG"
+            echo "  Текущий каталог: $(pwd)" >> "$DEBUG_LOG"
+            echo "  Запущено пользователем: $(whoami)" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
+            # ПРОВЕРКА СЕРТИФИКАТОВ
+            echo "[ПРОВЕРКА СЕРТИФИКАТОВ]" >> "$DEBUG_LOG"
+            if [ -f "/opt/vault/certs/grafana-client.crt" ]; then
+                echo "  ✅ /opt/vault/certs/grafana-client.crt существует" >> "$DEBUG_LOG"
+                ls -lh /opt/vault/certs/grafana-client.crt >> "$DEBUG_LOG" 2>&1
+            else
+                echo "  ❌ /opt/vault/certs/grafana-client.crt НЕ НАЙДЕН" >> "$DEBUG_LOG"
+            fi
+            
+            if [ -f "/opt/vault/certs/grafana-client.key" ]; then
+                echo "  ✅ /opt/vault/certs/grafana-client.key существует" >> "$DEBUG_LOG"
+                ls -lh /opt/vault/certs/grafana-client.key >> "$DEBUG_LOG" 2>&1
+            else
+                echo "  ❌ /opt/vault/certs/grafana-client.key НЕ НАЙДЕН" >> "$DEBUG_LOG"
+            fi
+            echo "" >> "$DEBUG_LOG"
+            
+            # ПРОВЕРКА ВЕРСИИ GRAFANA
+            echo "[ВЕРСИЯ GRAFANA]" >> "$DEBUG_LOG"
+            local version_response=$(curl -k -s -w "\n%{http_code}" -u "${grafana_user}:${grafana_password}" "${grafana_url}/api/health" 2>&1)
+            local version_code=$(echo "$version_response" | tail -1)
+            local version_body=$(echo "$version_response" | head -n -1)
+            
+            if [[ "$version_code" == "200" ]]; then
+                echo "  Ответ /api/health:" >> "$DEBUG_LOG"
+                echo "$version_body" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$version_body" >> "$DEBUG_LOG"
+                
+                local grafana_version=$(echo "$version_body" | jq -r '.version // "unknown"' 2>/dev/null)
+                echo "  Версия Grafana: $grafana_version" >> "$DEBUG_LOG"
+            else
+                echo "  ❌ Не удалось получить версию (HTTP $version_code)" >> "$DEBUG_LOG"
+            fi
+            echo "" >> "$DEBUG_LOG"
+            
+            # СПИСОК СУЩЕСТВУЮЩИХ SERVICE ACCOUNTS
+            echo "[СУЩЕСТВУЮЩИЕ SERVICE ACCOUNTS]" >> "$DEBUG_LOG"
+            local existing_sa_cmd="curl -k -s -w \"\n%{http_code}\" -u \"${grafana_user}:${grafana_password}\" \"${grafana_url}/api/serviceaccounts\""
+            local existing_sa_response=$(eval "$existing_sa_cmd" 2>&1)
+            local existing_sa_code=$(echo "$existing_sa_response" | tail -1)
+            local existing_sa_body=$(echo "$existing_sa_response" | head -n -1)
+            
+            echo "  Запрос: GET ${grafana_url}/api/serviceaccounts" >> "$DEBUG_LOG"
+            echo "  HTTP Code: $existing_sa_code" >> "$DEBUG_LOG"
+            if [[ "$existing_sa_code" == "200" ]]; then
+                echo "  Существующие Service Accounts:" >> "$DEBUG_LOG"
+                echo "$existing_sa_body" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$existing_sa_body" >> "$DEBUG_LOG"
+                
+                local count=$(echo "$existing_sa_body" | jq 'length' 2>/dev/null || echo "?")
+                echo "  Всего Service Accounts: $count" >> "$DEBUG_LOG"
+            else
+                echo "  ❌ Не удалось получить список (HTTP $existing_sa_code)" >> "$DEBUG_LOG"
+                echo "  Response: $existing_sa_body" >> "$DEBUG_LOG"
+            fi
+            echo "" >> "$DEBUG_LOG"
+            
+            # ПРОВЕРКА ДОСТУПНОСТИ API ENDPOINTS
+            echo "[ПРОВЕРКА API ENDPOINTS]" >> "$DEBUG_LOG"
+            echo "  Проверяем доступные endpoints для Service Accounts..." >> "$DEBUG_LOG"
+            
+            # Проверяем search endpoint
+            local search_test=$(curl -k -s -w "\n%{http_code}" -u "${grafana_user}:${grafana_password}" "${grafana_url}/api/serviceaccounts/search" 2>&1)
+            local search_code=$(echo "$search_test" | tail -1)
+            echo "  GET /api/serviceaccounts/search: HTTP $search_code" >> "$DEBUG_LOG"
+            
+            # Проверяем migrated endpoint
+            local migrated_test=$(curl -k -s -w "\n%{http_code}" -u "${grafana_user}:${grafana_password}" "${grafana_url}/api/serviceaccounts/migrated" 2>&1)
+            local migrated_code=$(echo "$migrated_test" | tail -1)
+            echo "  GET /api/serviceaccounts/migrated: HTTP $migrated_code" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
+            # ENVIRONMENT ПЕРЕМЕННЫЕ
+            echo "[ENVIRONMENT ПЕРЕМЕННЫЕ]" >> "$DEBUG_LOG"
+            echo "  GRAFANA_PORT: ${GRAFANA_PORT}" >> "$DEBUG_LOG"
+            echo "  PROMETHEUS_PORT: ${PROMETHEUS_PORT}" >> "$DEBUG_LOG"
+            echo "  SERVER_DOMAIN: ${SERVER_DOMAIN}" >> "$DEBUG_LOG"
+            echo "  SEC_MAN_ADDR: ${SEC_MAN_ADDR:-не задан}" >> "$DEBUG_LOG"
+            echo "  NAMESPACE_CI: ${NAMESPACE_CI:-не задан}" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
             
             # Отладочное логирование - начало функции
             echo "DEBUG_FUNC_START: Функция create_service_account_via_api вызвана $(date '+%Y-%m-%d %H:%M:%S')" >&2
@@ -2234,17 +2343,59 @@ setup_grafana_datasource_and_dashboards() {
             print_info "Payload для создания сервисного аккаунта: $sa_payload"
             log_diagnosis "Payload для создания сервисного аккаунта: $sa_payload"
             
+            echo "[PAYLOAD ДЛЯ SERVICE ACCOUNT]" >> "$DEBUG_LOG"
+            echo "  JSON Payload:" >> "$DEBUG_LOG"
+            echo "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$sa_payload" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            echo "  Команда JQ для генерации:" >> "$DEBUG_LOG"
+            echo "  jq -n --arg name \"$service_account_name\" '{name:\$name, isDisabled:false}'" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
+            echo "  Проверка payload:" >> "$DEBUG_LOG"
+            echo "    - Валидность JSON: $(echo "$sa_payload" | jq empty 2>&1 && echo "✅ валиден" || echo "❌ невалиден")" >> "$DEBUG_LOG"
+            echo "    - Количество полей: $(echo "$sa_payload" | jq 'keys | length' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
+            echo "    - Поля: $(echo "$sa_payload" | jq 'keys' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
+            echo "    - Значение name: $(echo "$sa_payload" | jq -r '.name' 2>/dev/null)" >> "$DEBUG_LOG"
+            echo "    - Значение isDisabled: $(echo "$sa_payload" | jq -r '.isDisabled' 2>/dev/null)" >> "$DEBUG_LOG"
+            echo "    - Есть ли поле 'role': $(echo "$sa_payload" | jq 'has("role")' 2>/dev/null)" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
+            echo "  Размеры:" >> "$DEBUG_LOG"
+            echo "    - Длина JSON строки: ${#sa_payload} символов" >> "$DEBUG_LOG"
+            echo "    - Длина имени SA: ${#service_account_name} символов" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
+            echo "  Raw payload (как видит bash):" >> "$DEBUG_LOG"
+            echo "    $sa_payload" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
+            echo "  Hexdump первых 100 байт (для проверки encoding):" >> "$DEBUG_LOG"
+            echo "$sa_payload" | head -c 100 | od -A x -t x1z -v >> "$DEBUG_LOG" 2>&1 || echo "  (hexdump недоступен)" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
+            
             # Сначала проверим доступность API
             echo "DEBUG_HEALTH_CHECK: Начало проверки доступности Grafana API" >&2
             echo "DEBUG_HEALTH_URL: Проверяем URL: ${grafana_url}/api/health" >&2
+            
+            echo "[HEALTH CHECK /api/health]" >> "$DEBUG_LOG"
+            echo "  URL: ${grafana_url}/api/health" >> "$DEBUG_LOG"
+            echo "  Время запроса: $(date '+%Y-%m-%d %H:%M:%S.%3N')" >> "$DEBUG_LOG"
             
             print_info "Проверка доступности Grafana API перед созданием сервисного аккаунта..."
             local test_cmd="curl -k -s -w \"\n%{http_code}\" -u \"${grafana_user}:*****\" \"${grafana_url}/api/health\""
             print_info "Команда проверки health: $test_cmd"
             
+            echo "  Полная curl команда:" >> "$DEBUG_LOG"
+            echo "  curl -k -s -w \"\\n%{http_code}\" -u \"${grafana_user}:${grafana_password}\" \"${grafana_url}/api/health\"" >> "$DEBUG_LOG"
+            
             local test_response=$(eval "curl -k -s -w \"\n%{http_code}\" -u \"${grafana_user}:${grafana_password}\" \"${grafana_url}/api/health\"" 2>&1)
             local test_code=$(echo "$test_response" | tail -1)
             local test_body=$(echo "$test_response" | head -n -1)
+            
+            echo "  HTTP Code: $test_code" >> "$DEBUG_LOG"
+            echo "  Response Body:" >> "$DEBUG_LOG"
+            echo "$test_body" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$test_body" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
             
             print_info "Проверка API /api/health: HTTP $test_code"
             log_diagnosis "Health check ответ: HTTP $test_code"
@@ -2255,13 +2406,19 @@ setup_grafana_datasource_and_dashboards() {
                 print_info "Тело ответа: $(echo "$test_body" | head -c 200)"
                 log_diagnosis "❌ Health check не прошел: HTTP $test_code"
                 log_diagnosis "Тело ответа: $test_body"
+                
+                echo "[ОШИБКА] Health check FAILED - HTTP $test_code" >> "$DEBUG_LOG"
+                echo "DEBUG LOG сохранен в: $DEBUG_LOG" >> "$DEBUG_LOG"
                 echo ""
                 echo "DEBUG_RETURN: Health check не прошел, возвращаем код 2" >&2
+                print_error "DEBUG LOG: $DEBUG_LOG"
                 return 2
             else
                 echo "DEBUG_HEALTH_SUCCESS: Health check прошел успешно, HTTP 200" >&2
                 print_success "Grafana API /api/health доступен"
                 log_diagnosis "✅ Health check прошел успешно"
+                echo "[SUCCESS] Health check passed ✅" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
             fi
             
             # Автоматическое определение: если доменное имя не работает, пробуем localhost
@@ -2331,6 +2488,85 @@ setup_grafana_datasource_and_dashboards() {
                 echo "DEBUG_SA_PAYLOAD: Payload: $sa_payload" >&2
                 echo "DEBUG_CURL_CMD: Команда curl (без пароля): $(echo "$cmd" | sed "s/${grafana_password}/*****/g")" >&2
                 
+                # ============================================================================
+                # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ CURL ЗАПРОСА В ФАЙЛ
+                # ============================================================================
+                echo "================================================================================" >> "$DEBUG_LOG"
+                echo "[CURL REQUEST - POST /api/serviceaccounts]" >> "$DEBUG_LOG"
+                if [[ "$use_cert" == "with_cert" ]]; then
+                    echo "  Тип: С клиентскими сертификатами (mTLS)" >> "$DEBUG_LOG"
+                else
+                    echo "  Тип: БЕЗ клиентских сертификатов (Basic Auth)" >> "$DEBUG_LOG"
+                fi
+                echo "  Время запроса: $(date '+%Y-%m-%d %H:%M:%S.%3N')" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Endpoint: ${grafana_url}/api/serviceaccounts" >> "$DEBUG_LOG"
+                echo "  Method: POST" >> "$DEBUG_LOG"
+                echo "  Content-Type: application/json" >> "$DEBUG_LOG"
+                echo "  Auth: Basic (user: ${grafana_user}, pass: ***)" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Полная curl команда (с реальным паролем):" >> "$DEBUG_LOG"
+                echo "  $cmd" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  [КОМАНДА ДЛЯ РУЧНОГО ВОСПРОИЗВЕДЕНИЯ]" >> "$DEBUG_LOG"
+                echo "  Скопируйте и выполните эту команду для проверки:" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                if [[ "$use_cert" == "with_cert" ]]; then
+                    echo "curl -k -v -w '\\n%{http_code}' \\" >> "$DEBUG_LOG"
+                    echo "  --cert '/opt/vault/certs/grafana-client.crt' \\" >> "$DEBUG_LOG"
+                    echo "  --key '/opt/vault/certs/grafana-client.key' \\" >> "$DEBUG_LOG"
+                    echo "  -X POST \\" >> "$DEBUG_LOG"
+                    echo "  -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
+                    echo "  -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
+                    echo "  -d '$sa_payload' \\" >> "$DEBUG_LOG"
+                    echo "  '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
+                else
+                    echo "curl -k -v -w '\\n%{http_code}' \\" >> "$DEBUG_LOG"
+                    echo "  -X POST \\" >> "$DEBUG_LOG"
+                    echo "  -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
+                    echo "  -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
+                    echo "  -d '$sa_payload' \\" >> "$DEBUG_LOG"
+                    echo "  '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
+                fi
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Request Payload:" >> "$DEBUG_LOG"
+                echo "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$sa_payload" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Request Headers:" >> "$DEBUG_LOG"
+                echo "    Content-Type: application/json" >> "$DEBUG_LOG"
+                echo "    Authorization: Basic $(echo -n "${grafana_user}:${grafana_password}" | base64)" >> "$DEBUG_LOG"
+                if [[ "$use_cert" == "with_cert" ]]; then
+                    echo "    Client Cert: /opt/vault/certs/grafana-client.crt" >> "$DEBUG_LOG"
+                    echo "    Client Key: /opt/vault/certs/grafana-client.key" >> "$DEBUG_LOG"
+                fi
+                echo "" >> "$DEBUG_LOG"
+                
+                # VERBOSE CURL для перехвата точных заголовков
+                echo "  [VERBOSE CURL OUTPUT - Точные заголовки и запрос]" >> "$DEBUG_LOG"
+                echo "  Запускаем curl с флагом -v для детального вывода..." >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                local verbose_cmd="${cmd//-s/-v}"
+                local verbose_output=$(eval "$verbose_cmd" 2>&1 | head -100)
+                echo "$verbose_output" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  [ТЕСТ: Что именно отправляется в теле запроса]" >> "$DEBUG_LOG"
+                echo "  Сохраняем payload во временный файл для проверки..." >> "$DEBUG_LOG"
+                echo "$sa_payload" > /tmp/test_payload.json
+                echo "  Файл создан: /tmp/test_payload.json" >> "$DEBUG_LOG"
+                echo "  Содержимое файла:" >> "$DEBUG_LOG"
+                cat /tmp/test_payload.json >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "  Размер файла: $(wc -c < /tmp/test_payload.json) байт" >> "$DEBUG_LOG"
+                echo "  MD5 hash: $(md5sum /tmp/test_payload.json 2>/dev/null | awk '{print $1}')" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
                 print_info "Выполнение curl команды для создания сервисного аккаунта..."
                 log_diagnosis "Начало выполнения curl команды..."
                 
@@ -2351,8 +2587,16 @@ setup_grafana_datasource_and_dashboards() {
                     log_diagnosis "Код возврата: $?"
                     log_diagnosis "Время ошибки: $(date '+%Y-%m-%d %H:%M:%S.%3N')"
                     
+                    echo "[ОШИБКА] CURL выполнение провалилось!" >> "$DEBUG_LOG"
+                    echo "  Время выполнения: ${curl_duration} секунд" >> "$DEBUG_LOG"
+                    echo "  Ошибка curl: $response" >> "$DEBUG_LOG"
+                    echo "  Код возврата: $?" >> "$DEBUG_LOG"
+                    echo "" >> "$DEBUG_LOG"
+                    echo "DEBUG LOG сохранен в: $DEBUG_LOG" >> "$DEBUG_LOG"
+                    
                     echo ""
                     echo "DEBUG_RETURN: Ошибка выполнения curl, возвращаем код 2" >&2
+                    print_error "DEBUG LOG: $DEBUG_LOG"
                     return 2
                 fi
                 
@@ -2364,6 +2608,27 @@ setup_grafana_datasource_and_dashboards() {
                 
                 echo "DEBUG_SA_RESPONSE: Ответ получен, HTTP код: $code" >&2
                 echo "DEBUG_SA_DURATION: Время выполнения: ${curl_duration} секунд" >&2
+                
+                # ============================================================================
+                # ЛОГИРОВАНИЕ ОТВЕТА ОТ API
+                # ============================================================================
+                echo "[CURL RESPONSE]" >> "$DEBUG_LOG"
+                echo "  HTTP Status Code: $code" >> "$DEBUG_LOG"
+                echo "  Время выполнения: ${curl_duration} секунд" >> "$DEBUG_LOG"
+                echo "  Время получения ответа: $(date '+%Y-%m-%d %H:%M:%S.%3N')" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Response Body:" >> "$DEBUG_LOG"
+                if [[ -n "$body" ]]; then
+                    echo "$body" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$body" >> "$DEBUG_LOG"
+                else
+                    echo "  (пустой ответ)" >> "$DEBUG_LOG"
+                fi
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Полный Raw Response:" >> "$DEBUG_LOG"
+                echo "$response" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
                 echo "DEBUG_SA_FULL_RESPONSE: Полный ответ от API:" >&2
                 echo "$response" >&2
                 echo "DEBUG_SA_BODY: Тело ответа: $body" >&2
@@ -2511,10 +2776,23 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "Извлеченный ID из ответа: '$sa_id'"
                 log_diagnosis "Полный JSON ответ: $sa_body"
                 
+                echo "================================================================================" >> "$DEBUG_LOG"
+                echo "[УСПЕХ] Service Account создан! ✅" >> "$DEBUG_LOG"
+                echo "  HTTP Code: $http_code" >> "$DEBUG_LOG"
+                echo "  Service Account ID: $sa_id" >> "$DEBUG_LOG"
+                echo "  Время: $(date '+%Y-%m-%d %H:%M:%S.%3N')" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "  Полный ответ от Grafana:" >> "$DEBUG_LOG"
+                echo "$sa_body" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$sa_body" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "DEBUG LOG завершен успешно: $DEBUG_LOG" >> "$DEBUG_LOG"
+                echo "================================================================================" >> "$DEBUG_LOG"
+                
                 if [[ -n "$sa_id" && "$sa_id" != "null" ]]; then
                     print_success "Сервисный аккаунт создан через API, ID: $sa_id"
                     log_diagnosis "✅ Сервисный аккаунт создан, ID: $sa_id"
                     log_diagnosis "=== УСПЕШНОЕ СОЗДАНИЕ СЕРВИСНОГО АККАУНТА ==="
+                    print_info "📋 DEBUG LOG: $DEBUG_LOG"
                     echo "$sa_id"
                     echo "DEBUG_RETURN: Сервисный аккаунт успешно создан, возвращаем код 0" >&2
                     return 0
@@ -2522,8 +2800,15 @@ setup_grafana_datasource_and_dashboards() {
                     print_warning "Сервисный аккаунт создан, но ID не получен"
                     log_diagnosis "⚠️  Сервисный аккаунт создан, но ID не получен"
                     log_diagnosis "Тело ответа для анализа: $sa_body"
+                    
+                    echo "[ПРОБЛЕМА] ID не извлечен из ответа" >> "$DEBUG_LOG"
+                    echo "  Response body: $sa_body" >> "$DEBUG_LOG"
+                    echo "  Попытка извлечения: jq -r '.id // empty'" >> "$DEBUG_LOG"
+                    echo "DEBUG LOG: $DEBUG_LOG" >> "$DEBUG_LOG"
+                    
                     echo ""
                     echo "DEBUG_RETURN: SA создан но ID не получен, возвращаем код 2" >&2
+                    print_error "📋 DEBUG LOG: $DEBUG_LOG"
                     return 2  # Специальный код для "частичного успеха"
                 fi
             elif [[ "$http_code" == "409" ]]; then
@@ -2620,8 +2905,151 @@ setup_grafana_datasource_and_dashboards() {
                 log_diagnosis "Пользователь: $grafana_user"
                 log_diagnosis "Время: $(date)"
                 
+                # ============================================================================
+                # ФИНАЛЬНЫЙ АНАЛИЗ ОШИБКИ В DEBUG LOG
+                # ============================================================================
+                echo "================================================================================" >> "$DEBUG_LOG"
+                echo "[ФИНАЛЬНЫЙ АНАЛИЗ ОШИБКИ]" >> "$DEBUG_LOG"
+                echo "  HTTP Status Code: $http_code" >> "$DEBUG_LOG"
+                echo "  Время: $(date '+%Y-%m-%d %H:%M:%S.%3N')" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "[ВОЗМОЖНЫЕ ПРИЧИНЫ ОШИБКИ $http_code]" >> "$DEBUG_LOG"
+                case "$http_code" in
+                    400)
+                        echo "  🔴 HTTP 400 Bad Request - Некорректный запрос" >> "$DEBUG_LOG"
+                        echo "" >> "$DEBUG_LOG"
+                        echo "  Частые причины:" >> "$DEBUG_LOG"
+                        echo "    1. Неправильный формат JSON payload" >> "$DEBUG_LOG"
+                        echo "    2. Неизвестные поля в JSON (например, 'role' в Grafana 11.x)" >> "$DEBUG_LOG"
+                        echo "    3. Некорректные значения полей" >> "$DEBUG_LOG"
+                        echo "    4. Неправильный Content-Type заголовок" >> "$DEBUG_LOG"
+                        echo "    5. Проблемы с кодировкой данных" >> "$DEBUG_LOG"
+                        echo "" >> "$DEBUG_LOG"
+                        echo "  Что проверить:" >> "$DEBUG_LOG"
+                        echo "    - Версия Grafana (проверено: 11.6.2)" >> "$DEBUG_LOG"
+                        echo "    - Формат payload должен быть: {\"name\":\"...\", \"isDisabled\":false}" >> "$DEBUG_LOG"
+                        echo "    - НЕ используйте поле 'role' в Grafana 11.x" >> "$DEBUG_LOG"
+                        echo "    - Проверьте не дублируются ли заголовки" >> "$DEBUG_LOG"
+                        ;;
+                    401)
+                        echo "  🔴 HTTP 401 Unauthorized - Проблема аутентификации" >> "$DEBUG_LOG"
+                        echo "" >> "$DEBUG_LOG"
+                        echo "  Проверьте:" >> "$DEBUG_LOG"
+                        echo "    - Правильность логина: $grafana_user" >> "$DEBUG_LOG"
+                        echo "    - Правильность пароля (длина: ${#grafana_password})" >> "$DEBUG_LOG"
+                        echo "    - Base64 auth: $(echo -n "${grafana_user}:${grafana_password}" | base64)" >> "$DEBUG_LOG"
+                        ;;
+                    403)
+                        echo "  🔴 HTTP 403 Forbidden - Недостаточно прав" >> "$DEBUG_LOG"
+                        echo "    Пользователь $grafana_user не имеет прав на создание Service Accounts" >> "$DEBUG_LOG"
+                        ;;
+                    404)
+                        echo "  🔴 HTTP 404 Not Found - Endpoint не найден" >> "$DEBUG_LOG"
+                        echo "    Проверьте URL: ${grafana_url}/api/serviceaccounts" >> "$DEBUG_LOG"
+                        echo "    Возможно неправильная версия API" >> "$DEBUG_LOG"
+                        ;;
+                    409)
+                        echo "  ⚠️  HTTP 409 Conflict - Service Account уже существует" >> "$DEBUG_LOG"
+                        echo "    Это нормально, нужно получить ID существующего аккаунта" >> "$DEBUG_LOG"
+                        ;;
+                    500)
+                        echo "  🔴 HTTP 500 Internal Server Error - Внутренняя ошибка Grafana" >> "$DEBUG_LOG"
+                        echo "    Проверьте логи Grafana: /var/log/grafana/ или /tmp/grafana-debug.log" >> "$DEBUG_LOG"
+                        ;;
+                    *)
+                        echo "  🔴 HTTP $http_code - Неожиданный код ответа" >> "$DEBUG_LOG"
+                        ;;
+                esac
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "[РУЧНОЕ ТЕСТИРОВАНИЕ - Команды для проверки]" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "  1. Проверить версию Grafana:" >> "$DEBUG_LOG"
+                echo "     curl -k -u '${grafana_user}:${grafana_password}' '${grafana_url}/api/health' | jq" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  2. Получить список Service Accounts:" >> "$DEBUG_LOG"
+                echo "     curl -k -u '${grafana_user}:${grafana_password}' '${grafana_url}/api/serviceaccounts' | jq" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  3. Попробовать создать через минимальный payload:" >> "$DEBUG_LOG"
+                echo "     curl -k -v -X POST \\" >> "$DEBUG_LOG"
+                echo "       -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
+                echo "       -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
+                echo "       -d '{\"name\":\"test-sa\"}' \\" >> "$DEBUG_LOG"
+                echo "       '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  4. Попробовать через файл с payload:" >> "$DEBUG_LOG"
+                echo "     echo '{\"name\":\"test-sa-2\",\"isDisabled\":false}' > /tmp/payload.json" >> "$DEBUG_LOG"
+                echo "     curl -k -v -X POST \\" >> "$DEBUG_LOG"
+                echo "       -H 'Content-Type: application/json' \\" >> "$DEBUG_LOG"
+                echo "       -u '${grafana_user}:${grafana_password}' \\" >> "$DEBUG_LOG"
+                echo "       -d @/tmp/payload.json \\" >> "$DEBUG_LOG"
+                echo "       '${grafana_url}/api/serviceaccounts'" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  5. Проверить логи Grafana:" >> "$DEBUG_LOG"
+                echo "     sudo journalctl -u grafana-server -n 100 --no-pager" >> "$DEBUG_LOG"
+                echo "     tail -100 /var/log/grafana/grafana.log" >> "$DEBUG_LOG"
+                echo "     tail -100 /tmp/grafana-debug.log" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  6. Создать через UI (рекомендуется для первой проверки):" >> "$DEBUG_LOG"
+                echo "     Administration → Users and access → Service accounts → New service account" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "[СПРАВКА: ПРАВИЛЬНЫЕ ФОРМАТЫ PAYLOAD ДЛЯ РАЗНЫХ ВЕРСИЙ GRAFANA]" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                echo "  Grafana 8.x (старая версия):" >> "$DEBUG_LOG"
+                echo "    {\"name\":\"test-sa\", \"role\":\"Admin\"}" >> "$DEBUG_LOG"
+                echo "    ⚠️  Поле 'role' поддерживалось" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Grafana 9.x - 10.x:" >> "$DEBUG_LOG"
+                echo "    {\"name\":\"test-sa\"}" >> "$DEBUG_LOG"
+                echo "    ⚠️  Поле 'role' убрано из API" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Grafana 11.x (текущая версия 11.6.2):" >> "$DEBUG_LOG"
+                echo "    Минимальный: {\"name\":\"test-sa\"}" >> "$DEBUG_LOG"
+                echo "    Расширенный: {\"name\":\"test-sa\", \"isDisabled\":false}" >> "$DEBUG_LOG"
+                echo "    ❌ НЕ используйте поле 'role'" >> "$DEBUG_LOG"
+                echo "    ✅ Поле 'isDisabled' опционально (по умолчанию false)" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "  Документация API для Grafana 11.x:" >> "$DEBUG_LOG"
+                echo "    POST /api/serviceaccounts" >> "$DEBUG_LOG"
+                echo "    Body: {" >> "$DEBUG_LOG"
+                echo "      \"name\": \"string (required)\"," >> "$DEBUG_LOG"
+                echo "      \"isDisabled\": \"boolean (optional, default: false)\"" >> "$DEBUG_LOG"
+                echo "    }" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "[ЧТО ДЕЛАТЬ]" >> "$DEBUG_LOG"
+                echo "  1. Прочитайте этот DEBUG LOG: cat $DEBUG_LOG" >> "$DEBUG_LOG"
+                echo "  2. Скопируйте содержимое и отправьте для анализа" >> "$DEBUG_LOG"
+                echo "  3. Выполните ручные команды выше для проверки" >> "$DEBUG_LOG"
+                echo "  4. Проверьте версию Grafana и соответствие API" >> "$DEBUG_LOG"
+                echo "  5. Если ошибка повторяется - проверьте логи Grafana" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "[СИСТЕМНАЯ ИНФОРМАЦИЯ]" >> "$DEBUG_LOG"
+                echo "  Hostname: $(hostname)" >> "$DEBUG_LOG"
+                echo "  Current User: $(whoami)" >> "$DEBUG_LOG"
+                echo "  Curl Version: $(curl --version | head -1)" >> "$DEBUG_LOG"
+                echo "  JQ Version: $(jq --version 2>&1)" >> "$DEBUG_LOG"
+                echo "" >> "$DEBUG_LOG"
+                
+                echo "================================================================================" >> "$DEBUG_LOG"
+                echo "DEBUG LOG ЗАВЕРШЕН - Файл: $DEBUG_LOG" >> "$DEBUG_LOG"
+                echo "================================================================================" >> "$DEBUG_LOG"
+                
                 echo ""
                 echo "DEBUG_RETURN: API запрос не удался (HTTP $http_code), возвращаем код 2" >&2
+                print_error "📋 ПОДРОБНЫЙ DEBUG LOG: $DEBUG_LOG"
+                print_info "Скопируйте содержимое этого файла для анализа проблемы"
                 return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
             fi
         }

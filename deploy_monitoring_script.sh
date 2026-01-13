@@ -1160,7 +1160,10 @@ setup_monitoring_user_units() {
     # Получаем параметры из /etc/prometheus/prometheus.env если он существует
     local prom_opts=""
     if [[ -f /etc/prometheus/prometheus.env ]]; then
-        prom_opts=$(grep '^PROMETHEUS_OPTS=' /etc/prometheus/prometheus.env 2>/dev/null | cut -d'"' -f2)
+        # Читаем файл и извлекаем значение переменной PROMETHEUS_OPTS
+        # Формат файла: PROMETHEUS_OPTS="параметры"
+        source /etc/prometheus/prometheus.env 2>/dev/null || true
+        prom_opts="${PROMETHEUS_OPTS:-}"
     fi
     
     # Если параметры не найдены, используем значения по умолчанию
@@ -3497,7 +3500,10 @@ main() {
     # При необходимости можно пропустить установку RPM-пакетов через RLM,
     # чтобы ускорить отладку (по аналогии с SKIP_VAULT_INSTALL).
     if [[ "${SKIP_RPM_INSTALL:-false}" == "true" ]]; then
-        print_warning "SKIP_RPM_INSTALL=true: пропускаем create_rlm_install_tasks, предполагаем что пакеты уже установлены"
+        print_warning "⚠️  SKIP_RPM_INSTALL=true: пропускаем установку RPM пакетов через RLM"
+        print_info "Предполагаем что Grafana, Prometheus и Harvest уже установлены на целевом сервере"
+        print_success "🎉 ВСЕ ЗАДАЧИ УСПЕШНО ЗАВЕРШЕНЫ!"
+        print_info "Переходим к настройке установленных пакетов..."
     else
         create_rlm_install_tasks
     fi

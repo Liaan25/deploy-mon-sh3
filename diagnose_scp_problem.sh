@@ -211,3 +211,4 @@ echo
 echo "Самый быстрый способ: заменить scp_script.sh в Jenkinsfile на улучшенную версию"
 
 
+

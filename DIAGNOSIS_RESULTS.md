@@ -111,3 +111,4 @@ ssh mvp_dev@tvlds-mvp001939.cloud.delta.sbrf.ru "echo test"
 ---
 
 **Итог**: Проблема **не в вашем коде**, а в **сетевой доступности** между Jenkins агентом `pvlss-jenci0064` и сервером `tvlds-mvp001939.cloud.delta.sbrf.ru`. Порту 22 отказано в подключении.
+

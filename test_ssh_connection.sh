@@ -199,3 +199,4 @@ echo "Если scp не работает, можно использовать rs
 echo "rsync -avz -e \"ssh -i ~/.ssh/id_rsa\" deploy_monitoring_script.sh CI10742292-lnx-mon_sys@tvlds-mvp001939.cloud.delta.sbrf.ru:/tmp/deploy-monitoring/"
 
 
+

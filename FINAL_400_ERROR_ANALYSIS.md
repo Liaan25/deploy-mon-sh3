@@ -193,3 +193,4 @@ USE_GRAFANA_LOCALHOST=true sudo ./deploy_monitoring_script.sh
 Если проблема persists, запустите `./test_payload_formats.sh` для определения точной причины и соответствующего исправления.
 
 
+

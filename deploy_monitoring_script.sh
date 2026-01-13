@@ -2355,10 +2355,10 @@ setup_grafana_datasource_and_dashboards() {
             echo "       (избегаем проблем с экранированием кавычек в bash)" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             echo "  JSON Payload (compact, no trailing newline):" >> "$DEBUG_LOG"
-            echo "  $sa_payload" >> "$DEBUG_LOG"
+            printf '  %s\n' "$sa_payload" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             echo "  JSON Payload (pretty-print для читаемости):" >> "$DEBUG_LOG"
-            echo "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$sa_payload" >> "$DEBUG_LOG"
+            printf '%s' "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || printf '%s\n' "$sa_payload" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             echo "  Команда JQ для генерации:" >> "$DEBUG_LOG"
             echo "  jq -c -n --arg name \"$service_account_name\" '{name:\$name}' | tr -d '\\n'" >> "$DEBUG_LOG"
@@ -2366,13 +2366,13 @@ setup_grafana_datasource_and_dashboards() {
             echo "" >> "$DEBUG_LOG"
             
             echo "  Проверка payload:" >> "$DEBUG_LOG"
-            echo "    - Валидность JSON: $(echo "$sa_payload" | jq empty 2>&1 && echo "✅ валиден" || echo "❌ невалиден")" >> "$DEBUG_LOG"
-            echo "    - Формат: $(echo "$sa_payload" | grep -q $'\n' && echo "❌ содержит newline!" || echo "✅ компактный, без newline")" >> "$DEBUG_LOG"
-            echo "    - Количество полей: $(echo "$sa_payload" | jq 'keys | length' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
-            echo "    - Поля: $(echo "$sa_payload" | jq -c 'keys' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
-            echo "    - Значение name: $(echo "$sa_payload" | jq -r '.name' 2>/dev/null)" >> "$DEBUG_LOG"
-            echo "    - Есть ли поле 'role': $(echo "$sa_payload" | jq 'has("role")' 2>/dev/null)" >> "$DEBUG_LOG"
-            echo "    - Есть ли поле 'isDisabled': $(echo "$sa_payload" | jq 'has("isDisabled")' 2>/dev/null)" >> "$DEBUG_LOG"
+            echo "    - Валидность JSON: $(printf '%s' "$sa_payload" | jq empty 2>&1 && echo "✅ валиден" || echo "❌ невалиден")" >> "$DEBUG_LOG"
+            echo "    - Формат: $(printf '%s' "$sa_payload" | grep -q $'\n' && echo "❌ содержит newline!" || echo "✅ компактный, без newline")" >> "$DEBUG_LOG"
+            echo "    - Количество полей: $(printf '%s' "$sa_payload" | jq 'keys | length' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
+            echo "    - Поля: $(printf '%s' "$sa_payload" | jq -c 'keys' 2>/dev/null || echo "?")" >> "$DEBUG_LOG"
+            echo "    - Значение name: $(printf '%s' "$sa_payload" | jq -r '.name' 2>/dev/null)" >> "$DEBUG_LOG"
+            echo "    - Есть ли поле 'role': $(printf '%s' "$sa_payload" | jq 'has("role")' 2>/dev/null)" >> "$DEBUG_LOG"
+            echo "    - Есть ли поле 'isDisabled': $(printf '%s' "$sa_payload" | jq 'has("isDisabled")' 2>/dev/null)" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             echo "  Размеры:" >> "$DEBUG_LOG"
@@ -2386,13 +2386,7 @@ setup_grafana_datasource_and_dashboards() {
             echo "" >> "$DEBUG_LOG"
             
             echo "  Hexdump полного payload (проверка на trailing bytes):" >> "$DEBUG_LOG"
-            echo "$sa_payload" | od -A x -t x1z -v >> "$DEBUG_LOG" 2>&1 || echo "  (hexdump недоступен)" >> "$DEBUG_LOG"
-            echo "" >> "$DEBUG_LOG"
-            
-            echo "  Payload сохранен во временный файл для curl:" >> "$DEBUG_LOG"
-            echo "    Файл: $payload_file" >> "$DEBUG_LOG"
-            echo "    Размер файла: $(wc -c < "$payload_file" 2>/dev/null || echo "?") байт" >> "$DEBUG_LOG"
-            echo "    MD5 hash: $(md5sum "$payload_file" 2>/dev/null | awk '{print $1}' || echo "?")" >> "$DEBUG_LOG"
+            printf '%s' "$sa_payload" | od -A x -t x1z -v >> "$DEBUG_LOG" 2>&1 || echo "  (hexdump недоступен)" >> "$DEBUG_LOG"
             echo "" >> "$DEBUG_LOG"
             
             # Сначала проверим доступность API
@@ -2473,6 +2467,16 @@ setup_grafana_datasource_and_dashboards() {
             
             # Гарантируем удаление временного файла при выходе из функции
             trap "rm -f '$payload_file' 2>/dev/null" RETURN
+            
+            # Логируем созданный файл
+            echo "[PAYLOAD FILE CREATED]" >> "$DEBUG_LOG"
+            echo "  Временный файл для curl создан:" >> "$DEBUG_LOG"
+            echo "    Файл: $payload_file" >> "$DEBUG_LOG"
+            echo "    Размер файла: $(wc -c < "$payload_file" 2>/dev/null || echo "?") байт" >> "$DEBUG_LOG"
+            echo "    MD5 hash: $(md5sum "$payload_file" 2>/dev/null | awk '{print $1}' || echo "?")" >> "$DEBUG_LOG"
+            echo "    Hexdump файла (для проверки):" >> "$DEBUG_LOG"
+            od -A x -t x1z -v "$payload_file" >> "$DEBUG_LOG" 2>&1 || echo "    (hexdump недоступен)" >> "$DEBUG_LOG"
+            echo "" >> "$DEBUG_LOG"
             
             # Вариант 3: Сначала пробуем без сертификатов, потом с ними
             # ВАЖНО: используем '@файл' вместо прямой передачи JSON строки
@@ -2574,7 +2578,7 @@ setup_grafana_datasource_and_dashboards() {
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "  Request Payload:" >> "$DEBUG_LOG"
-                echo "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || echo "$sa_payload" >> "$DEBUG_LOG"
+                printf '%s' "$sa_payload" | jq '.' >> "$DEBUG_LOG" 2>&1 || printf '%s\n' "$sa_payload" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
                 echo "  Request Headers:" >> "$DEBUG_LOG"
@@ -2598,13 +2602,15 @@ setup_grafana_datasource_and_dashboards() {
                 
                 echo "  [ТЕСТ: Что именно отправляется в теле запроса]" >> "$DEBUG_LOG"
                 echo "  Сохраняем payload во временный файл для проверки..." >> "$DEBUG_LOG"
-                echo "$sa_payload" > /tmp/test_payload.json
+                printf '%s' "$sa_payload" > /tmp/test_payload.json
                 echo "  Файл создан: /tmp/test_payload.json" >> "$DEBUG_LOG"
                 echo "  Содержимое файла:" >> "$DEBUG_LOG"
                 cat /tmp/test_payload.json >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 echo "  Размер файла: $(wc -c < /tmp/test_payload.json) байт" >> "$DEBUG_LOG"
                 echo "  MD5 hash: $(md5sum /tmp/test_payload.json 2>/dev/null | awk '{print $1}')" >> "$DEBUG_LOG"
+                echo "  Hexdump test файла:" >> "$DEBUG_LOG"
+                od -A x -t x1z -v /tmp/test_payload.json >> "$DEBUG_LOG" 2>&1 || echo "  (hexdump недоступен)" >> "$DEBUG_LOG"
                 echo "" >> "$DEBUG_LOG"
                 
                 print_info "Выполнение curl команды для создания сервисного аккаунта..."

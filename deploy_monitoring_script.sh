@@ -2229,7 +2229,8 @@ setup_grafana_datasource_and_dashboards() {
             
             local sa_payload sa_response http_code sa_body sa_id
             
-            sa_payload=$(jq -n --arg name "$service_account_name" --arg role "Admin" '{name:$name, role:$role}')
+            # Grafana 11.x не поддерживает поле "role" при создании service account
+            sa_payload=$(jq -n --arg name "$service_account_name" '{name:$name, isDisabled:false}')
             print_info "Payload для создания сервисного аккаунта: $sa_payload"
             log_diagnosis "Payload для создания сервисного аккаунта: $sa_payload"
             

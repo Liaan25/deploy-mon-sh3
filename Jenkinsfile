@@ -38,36 +38,17 @@ pipeline {
                     env.DATE_INSTALL = sh(script: "date '+%Y%m%d_%H%M%S'", returnStdout: true).trim()
                     
                     echo "================================================"
-                    echo "=== НАЧАЛО ПАЙПЛАЙНА С ОТЛАДКОЙ ==="
+                    echo "=== НАЧАЛО ПАЙПЛАЙНА ==="
                     echo "================================================"
-                    echo "[DEBUG] Время запуска: ${new Date()}"
-                    echo "[DEBUG] Номер билда: ${currentBuild.number}"
-                    echo "[DEBUG] Workspace: ${env.WORKSPACE}"
-                    echo "[DEBUG] Путь: ${pwd()}"
-                    echo "[DEBUG] DATE_INSTALL: ${env.DATE_INSTALL}"
-                    echo "[DEBUG] Jenkins агент (CI): ${env.NODE_NAME}"
-                    
-                    // Проверяем, является ли это ребилдом
-                    try {
-                        def isRebuild = currentBuild.rawBuild.getCause(hudson.model.Cause$UpstreamCause) != null
-                        echo "[DEBUG] Это ребилд: ${isRebuild}"
-                    } catch (Exception e) {
-                        echo "[DEBUG] Не удалось определить тип запуска: ${e.message}"
-                    }
+                    echo "[INFO] Билд: ${currentBuild.number}"
+                    echo "[INFO] DATE_INSTALL: ${env.DATE_INSTALL}"
                     
                     // Очистка workspace от старых временных файлов
-                    echo "[DEBUG] Очистка workspace от старых временных файлов..."
+                    echo "[INFO] Очистка workspace..."
                     sh '''
-                        echo "Текущая директория: $(pwd)"
-                        echo "Содержимое до очистки:"
-                        ls -la || true
-                        
                         # Удаляем старые временные файлы
                         rm -f prep_clone*.sh scp_script*.sh verify_script*.sh deploy_script*.sh check_results*.sh cleanup_script*.sh get_domain*.sh get_ip*.sh 2>/dev/null || true
                         rm -f temp_data_cred.json 2>/dev/null || true
-                        
-                        echo "Содержимое после очистки:"
-                        ls -la || true
                     '''
                     echo "[SUCCESS] Workspace очищен"
                 }
@@ -82,39 +63,19 @@ pipeline {
             steps {
                 script {
                     echo "================================================"
-                    echo "=== ОТЛАДКА ПАРАМЕТРОВ ПАЙПЛАЙНА ==="
+                    echo "=== ПРОВЕРКА ПАРАМЕТРОВ ==="
                     echo "================================================"
                     
-                    // Выводим все параметры
-                    echo "[DEBUG] === ВСЕ ПАРАМЕТРЫ ПАЙПЛАЙНА ==="
-                    echo "[DEBUG] SERVER_ADDRESS: '${params.SERVER_ADDRESS}'"
-                    echo "[DEBUG] SSH_CREDENTIALS_ID: '${params.SSH_CREDENTIALS_ID}'"
-                    echo "[DEBUG] SEC_MAN_ADDR: '${params.SEC_MAN_ADDR}'"
-                    echo "[DEBUG] NAMESPACE_CI: '${params.NAMESPACE_CI}'"
-                    echo "[DEBUG] NETAPP_API_ADDR: '${params.NETAPP_API_ADDR}'"
-                    echo "[DEBUG] VAULT_AGENT_KV: '${params.VAULT_AGENT_KV}'"
-                    echo "[DEBUG] RPM_URL_KV: '${params.RPM_URL_KV}'"
-                    echo "[DEBUG] NETAPP_SSH_KV: '${params.NETAPP_SSH_KV}'"
-                    echo "[DEBUG] GRAFANA_WEB_KV: '${params.GRAFANA_WEB_KV}'"
-                    echo "[DEBUG] SBERCA_CERT_KV: '${params.SBERCA_CERT_KV}'"
-                    echo "[DEBUG] ADMIN_EMAIL: '${params.ADMIN_EMAIL}'"
-                    echo "[DEBUG] GRAFANA_PORT: '${params.GRAFANA_PORT}'"
-                    echo "[DEBUG] PROMETHEUS_PORT: '${params.PROMETHEUS_PORT}'"
-                    echo "[DEBUG] RLM_API_URL: '${params.RLM_API_URL}'"
-                    echo "[DEBUG] SKIP_VAULT_INSTALL: '${params.SKIP_VAULT_INSTALL}'"
-                    
                     // Проверка обязательных параметров
-                    echo "[DEBUG] === ПРОВЕРКА ОБЯЗАТЕЛЬНЫХ ПАРАМЕТРОВ ==="
                     if (!params.SERVER_ADDRESS?.trim()) {
-                        error("❌ ОШИБКА: Не указан обязательный параметр SERVER_ADDRESS")
+                        error("❌ Не указан SERVER_ADDRESS")
                     }
                     if (!params.SSH_CREDENTIALS_ID?.trim()) {
-                        error("❌ ОШИБКА: Не указан обязательный параметр SSH_CREDENTIALS_ID")
+                        error("❌ Не указан SSH_CREDENTIALS_ID")
                     }
                     
-                    echo "[SUCCESS] Все обязательные параметры указаны"
-                    echo "[INFO] Целевой сервер: ${params.SERVER_ADDRESS}"
-                    echo "[INFO] SSH Credentials: ${params.SSH_CREDENTIALS_ID}"
+                    echo "[OK] Параметры проверены"
+                    echo "[INFO] Сервер: ${params.SERVER_ADDRESS}"
                 }
             }
         }
@@ -126,17 +87,9 @@ pipeline {
             }
             steps {
                 script {
-                    echo "[DEBUG] === ИНФОРМАЦИЯ О КОДЕ И ОКРУЖЕНИИ ==="
+                    echo "[INFO] === ИНФОРМАЦИЯ О КОДЕ ==="
                     sh '''
-                        echo "[DEBUG] Текущая директория: $(pwd)"
-                        echo "[DEBUG] Информация о git:"
-                        git log --oneline -3 2>/dev/null || echo "[WARNING] Не удалось получить информацию о git"
-                        echo ""
-                        echo "[DEBUG] Информация о системе:"
-                        uname -a
-                        echo ""
-                        echo "[DEBUG] Доступные команды:"
-                        which ssh scp rsync jq curl 2>/dev/null || echo "[INFO] Некоторые команды не найдены"
+                        git log --oneline -3 2>/dev/null || echo "[INFO] Git история недоступна"
                     '''
                 }
             }
@@ -150,51 +103,24 @@ pipeline {
             steps {
                 script {
                     echo "================================================"
-                    echo "=== РАСШИРЕННАЯ ДИАГНОСТИКА СЕТИ И СЕРВЕРА ==="
+                    echo "=== ДИАГНОСТИКА СЕТИ И СЕРВЕРА ==="
                     echo "================================================"
-                    echo "[DEBUG] Целевой сервер: ${params.SERVER_ADDRESS}"
-                    echo "[DEBUG] Jenkins агент (CI): ${env.NODE_NAME ?: 'не определен'}"
-                    echo ""
+                    echo "[INFO] Целевой сервер: ${params.SERVER_ADDRESS}"
                     
                     sh '''
-                        echo "[DIAG] === 1. ИНФОРМАЦИЯ О JENKINS АГЕНТЕ ==="
-                        echo "[DIAG] Имя хоста агента: $(hostname -f 2>/dev/null || hostname)"
-                        echo "[DIAG] IP адреса агента:"
-                        ip addr show 2>/dev/null | grep -E "inet " | awk '{print "[DIAG]   " $2 " (" $NF ")"}' || echo "[DIAG]   Не удалось получить IP адреса"
-                        echo ""
-                        
-                        echo "[DIAG] === 2. ДИАГНОСТИКА DNS ==="
-                        echo "[DIAG] Разрешение имени ''' + params.SERVER_ADDRESS + '''..."
                         nslookup ''' + params.SERVER_ADDRESS + ''' 2>/dev/null || {
-                            echo "[ERROR] Ошибка DNS разрешения"
-                            echo "[DIAG] Попробуем через dig:"
-                            dig ''' + params.SERVER_ADDRESS + ''' +short 2>/dev/null || echo "[DIAG] dig не доступен"
+                            echo "[WARNING] DNS разрешение не удалось"
                         }
-                        echo ""
                         
-                        echo "[DIAG] === 3. ПРОВЕРКА PING ==="
-                        echo "[DIAG] Пинг сервера ''' + params.SERVER_ADDRESS + ''' (3 попытки):"
+                        echo "[INFO] === ПРОВЕРКА PING ==="
                         if command -v ping >/dev/null 2>&1; then
-                            ping -c 3 -W 2 ''' + params.SERVER_ADDRESS + ''' 2>/dev/null || echo "[WARNING] Ping не работает или недоступен"
-                        else
-                            echo "[DIAG] Команда ping не найдена"
+                            ping -c 2 -W 2 ''' + params.SERVER_ADDRESS + ''' 2>/dev/null || echo "[WARNING] Ping недоступен"
                         fi
-                        echo ""
                         
-                        echo "[DIAG] === 4. ПРОВЕРКА ПОРТОВ ==="
-                        echo "[DIAG] Проверка порта 22 (SSH) на ''' + params.SERVER_ADDRESS + ''':"
+                        echo "[INFO] === ПРОВЕРКА SSH ПОРТА ==="
                         if command -v nc >/dev/null 2>&1; then
-                            timeout 5 nc -zv ''' + params.SERVER_ADDRESS + ''' 22 2>&1 && echo "[OK] Порт 22 открыт" || echo "[WARNING] Порт 22 закрыт/недоступен (может быть ограничение для clearAgent)"
-                        else
-                            echo "[DIAG] nc не найден, пропускаем проверку порта"
-                            echo "[INFO] Проверка SSH будет выполнена на этапе CDL с агента masterLin"
+                            timeout 5 nc -zv ''' + params.SERVER_ADDRESS + ''' 22 2>&1 || echo "[INFO] SSH проверка будет выполнена на этапе CDL"
                         fi
-                        echo ""
-                        
-                        echo "[INFO] === ВАЖНО ==="
-                        echo "[INFO] Этот агент (clearAgent) имеет ограниченный сетевой доступ"
-                        echo "[INFO] SSH подключение будет выполняться на следующем этапе (CDL) с агента masterLin"
-                        echo "[INFO] masterLin агенты имеют полный доступ к целевым серверам"
                     '''
                     
                     echo "[SUCCESS] CI диагностика завершена"
@@ -206,27 +132,22 @@ pipeline {
             agent { label "clearAgent&&sbel8&&!static" }
             steps {
                 script {
-                    // Устанавливаем DATE_INSTALL если она ещё не установлена (когда CI этапы пропущены)
+                    // Устанавливаем DATE_INSTALL если её ещё нет
                     if (!env.DATE_INSTALL) {
                         env.DATE_INSTALL = sh(script: "date '+%Y%m%d_%H%M%S'", returnStdout: true).trim()
-                        echo "[DEBUG] DATE_INSTALL установлена: ${env.DATE_INSTALL}"
                     }
                     
-                    echo "[STEP] Получение чувствительных данных из Vault"
-                    echo "[DEBUG] SEC_MAN_ADDR: ${params.SEC_MAN_ADDR}"
-                    echo "[DEBUG] NAMESPACE_CI: ${params.NAMESPACE_CI}"
+                    echo "[STEP] Получение данных из Vault"
                     
                     def vaultSecrets = []
 
                     if (params.VAULT_AGENT_KV?.trim()) {
-                        echo "[DEBUG] Добавляем VAULT_AGENT_KV: ${params.VAULT_AGENT_KV}"
                         vaultSecrets << [path: params.VAULT_AGENT_KV, secretValues: [
                             [envVar: 'VA_ROLE_ID', vaultKey: 'role_id'],
                             [envVar: 'VA_SECRET_ID', vaultKey: 'secret_id']
                         ]]
                     }
                     if (params.RPM_URL_KV?.trim()) {
-                        echo "[DEBUG] Добавляем RPM_URL_KV: ${params.RPM_URL_KV}"
                         vaultSecrets << [path: params.RPM_URL_KV, secretValues: [
                             [envVar: 'VA_RPM_HARVEST',    vaultKey: 'harvest'],
                             [envVar: 'VA_RPM_PROMETHEUS', vaultKey: 'prometheus'],
@@ -234,7 +155,6 @@ pipeline {
                         ]]
                     }
                     if (params.NETAPP_SSH_KV?.trim()) {
-                        echo "[DEBUG] Добавляем NETAPP_SSH_KV: ${params.NETAPP_SSH_KV}"
                         vaultSecrets << [path: params.NETAPP_SSH_KV, secretValues: [
                             [envVar: 'VA_NETAPP_SSH_ADDR', vaultKey: 'addr'],
                             [envVar: 'VA_NETAPP_SSH_USER', vaultKey: 'user'],
@@ -242,7 +162,6 @@ pipeline {
                         ]]
                     }
                     if (params.GRAFANA_WEB_KV?.trim()) {
-                        echo "[DEBUG] Добавляем GRAFANA_WEB_KV: ${params.GRAFANA_WEB_KV}"
                         vaultSecrets << [path: params.GRAFANA_WEB_KV, secretValues: [
                             [envVar: 'VA_GRAFANA_WEB_USER', vaultKey: 'user'],
                             [envVar: 'VA_GRAFANA_WEB_PASS', vaultKey: 'pass']
@@ -250,8 +169,8 @@ pipeline {
                     }
                     
                     if (vaultSecrets.isEmpty()) {
-                        echo "[WARNING] Ни один из KV-путей не задан, пропускаем обращение к Vault"
-                        // Создаем пустой JSON для совместимости
+                        echo "[WARNING] KV пути не заданы"
+                        // Создаем пустой JSON
                         def emptyData = [
                             "vault-agent": [role_id: '', secret_id: ''],
                             "rpm_url": [harvest: '', prometheus: '', grafana: ''],
@@ -259,9 +178,7 @@ pipeline {
                             "grafana_web": [user: '', pass: '']
                         ]
                         writeFile file: 'temp_data_cred.json', text: groovy.json.JsonOutput.toJson(emptyData)
-                        echo "[INFO] Создан пустой temp_data_cred.json для совместимости"
                     } else {
-                        echo "[DEBUG] Подключаемся к Vault с ${vaultSecrets.size()} секретами"
                         try {
                             withVault([
                                 configuration: [
@@ -272,7 +189,6 @@ pipeline {
                                 ],
                                 vaultSecrets: vaultSecrets
                             ]) {
-                                echo "[DEBUG] Успешно подключились к Vault"
                                 
                                 def data = [
                                     "vault-agent": [
@@ -296,52 +212,26 @@ pipeline {
                                 ]
                                 
                                 writeFile file: 'temp_data_cred.json', text: groovy.json.JsonOutput.toJson(data)
-                                echo "[DEBUG] Файл temp_data_cred.json создан"
                             }
                         } catch (Exception e) {
-                            echo "[ERROR] Ошибка при работе с Vault: ${e.message}"
-                            error("Не удалось получить данные из Vault: ${e.message}")
+                            echo "[ERROR] Ошибка Vault: ${e.message}"
+                            error("Не удалось получить данные из Vault")
                         }
                     }
                     
-                    // ДЕТАЛЬНАЯ ПРОВЕРКА СОЗДАННОГО ФАЙЛА
-                    echo "[DEBUG] === ПРОВЕРКА temp_data_cred.json ==="
+                    // Проверка файла
                     sh '''
-                        echo "[DEBUG] Проверяем наличие файла..."
-                        if [ ! -f "temp_data_cred.json" ]; then
-                            echo "[ERROR] Файл temp_data_cred.json не создан!"
-                            exit 1
-                        fi
+                        [ ! -f "temp_data_cred.json" ] && echo "[ERROR] Файл не создан!" && exit 1
                         
-                        echo "[DEBUG] Информация о файле:"
-                        ls -la temp_data_cred.json
-                        echo "[DEBUG] Размер файла: $(wc -c < temp_data_cred.json) байт"
-                        
-                        echo "[DEBUG] Содержимое (первые 500 символов, без секретов):"
-                        head -c 500 temp_data_cred.json | sed 's/"pass": "[^"]*"/"pass": "***"/g; s/"secret_id": "[^"]*"/"secret_id": "***"/g'
-                        echo ""
-                        
-                        echo "[DEBUG] Проверка JSON валидности..."
                         if command -v jq >/dev/null 2>&1; then
-                            if jq empty temp_data_cred.json 2>/dev/null; then
-                                echo "[OK] JSON валиден"
-                                echo "[DEBUG] Структура JSON:"
-                                jq 'keys' temp_data_cred.json
-                            else
-                                echo "[ERROR] Невалидный JSON!"
-                                echo "[DEBUG] Сырое содержимое:"
-                                cat temp_data_cred.json
-                                exit 1
-                            fi
-                        else
-                            echo "[WARNING] jq не установлен, пропускаем проверку JSON"
+                            jq empty temp_data_cred.json 2>/dev/null || { echo "[ERROR] Невалидный JSON!"; exit 1; }
                         fi
                     '''
                     
-                    // Сохраняем файл как артефакт для следующего stage (CDL)
+                    // Сохраняем для CDL этапа
                     stash name: 'vault-credentials', includes: 'temp_data_cred.json'
                     
-                    echo "[SUCCESS] Данные из Vault успешно получены и проверены"
+                    echo "[SUCCESS] Данные из Vault получены"
                 }
             }
         }
@@ -358,302 +248,160 @@ pipeline {
             steps {
                 script {
                     echo "================================================"
-                    echo "=== CDL ЭТАП: КОПИРОВАНИЕ НА СЕРВЕР ==="
+                    echo "=== CDL: КОПИРОВАНИЕ НА СЕРВЕР ==="
                     echo "================================================"
-                    echo "[DEBUG] Jenkins агент (CDL): ${env.NODE_NAME}"
-                    echo "[DEBUG] Сервер: ${params.SERVER_ADDRESS}"
+                    echo "[INFO] Сервер: ${params.SERVER_ADDRESS}"
                     
                     // Восстанавливаем файл с credentials из stash
                     unstash 'vault-credentials'
                     
-                    echo "[STEP] Клонирование репозитория и копирование на сервер ${params.SERVER_ADDRESS}..."
-                    echo "[DEBUG] Проверяем наличие необходимых файлов перед копированием..."
+                    echo "[STEP] Копирование скрипта и файлов на сервер..."
                     sh '''
-                        echo "[DEBUG] Проверка файлов в workspace:"
-                        ls -la
-                        echo ""
-                        echo "[DEBUG] Проверка deploy_monitoring_script.sh:"
-                        if [ -f "deploy_monitoring_script.sh" ]; then
-                            echo "[OK] deploy_monitoring_script.sh найден"
-                            ls -la deploy_monitoring_script.sh
-                        else
-                            echo "[ERROR] deploy_monitoring_script.sh не найден!"
-                            exit 1
-                        fi
-                        echo ""
-                        echo "[DEBUG] Проверка папки wrappers:"
-                        if [ -d "wrappers" ]; then
-                            echo "[OK] Папка wrappers найдена"
-                            ls -la wrappers/
-                        else
-                            echo "[ERROR] Папка wrappers не найдена!"
-                            exit 1
-                        fi
-                        echo ""
-                        echo "[DEBUG] Проверка temp_data_cred.json:"
-                        if [ -f "temp_data_cred.json" ]; then
-                            echo "[OK] temp_data_cred.json найден"
-                            ls -la temp_data_cred.json
-                        else
-                            echo "[ERROR] temp_data_cred.json не найден!"
-                            exit 1
-                        fi
+                        # Проверка необходимых файлов
+                        [ ! -f "deploy_monitoring_script.sh" ] && echo "[ERROR] deploy_monitoring_script.sh не найден!" && exit 1
+                        [ ! -d "wrappers" ] && echo "[ERROR] Папка wrappers не найдена!" && exit 1
+                        [ ! -f "temp_data_cred.json" ] && echo "[ERROR] temp_data_cred.json не найден!" && exit 1
+                        echo "[OK] Все файлы на месте"
                     '''
                     
                     withCredentials([
                         sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')
                     ]) {
-                        echo "[DEBUG] Credentials получены:"
-                        echo "[DEBUG] SSH_USER: ${env.SSH_USER}"
-                        echo "[DEBUG] SSH_KEY файл: ${env.SSH_KEY}"
-                        
-                        // Создаем улучшенный prep_clone.sh
+                        // Генерируем лаунчеры
                         writeFile file: 'prep_clone.sh', text: '''#!/bin/bash
 set -e
 
-echo "[DEBUG] === НАЧАЛО PREP_CLONE.SH ==="
-echo "[DEBUG] Время: $(date)"
-echo "[DEBUG] Текущая директория: $(pwd)"
-
-# Автоматически генерируем лаунчеры с проверкой sha256 для обёрток
+# Автоматически генерируем лаунчеры
 if [ -f wrappers/generate_launchers.sh ]; then
-  echo "[DEBUG] Запуск generate_launchers.sh..."
   /bin/bash wrappers/generate_launchers.sh
-  echo "[OK] Лаунчеры сгенерированы"
-else
-  echo "[WARNING] wrappers/generate_launchers.sh не найден, пропускаем"
 fi
-
-echo "[DEBUG] === PREP_CLONE.SH ЗАВЕРШЕН ==="
 '''
 
-                        // Создаем УЛУЧШЕННЫЙ scp_script.sh с отладочным выводом
+                        // Создаем scp_script.sh
                         writeFile file: 'scp_script.sh', text: '''#!/bin/bash
 set -e
 
-echo "[DEBUG] === НАЧАЛО УЛУЧШЕННОГО SCP_SCRIPT.SH ==="
-echo "[DEBUG] Время: $(date)"
-echo "[DEBUG] Текущая директория: $(pwd)"
-echo "[DEBUG] SSH_USER: ''' + env.SSH_USER + '''"
-echo "[DEBUG] SERVER_ADDRESS: ''' + params.SERVER_ADDRESS + '''"
-echo "[DEBUG] SSH_KEY: ''' + env.SSH_KEY + '''"
-
-# Проверяем наличие ключа
+# Проверяем наличие SSH ключа
 if [ ! -f "''' + env.SSH_KEY + '''" ]; then
-    echo "[ERROR] SSH ключ не найден: ''' + env.SSH_KEY + '''"
-    echo "[ERROR] Содержимое текущей директории:"
-    ls -la
+    echo "[ERROR] SSH ключ не найден"
     exit 1
 fi
 
-echo "[OK] SSH ключ найден"
-echo "[DEBUG] Информация о ключе:"
-ls -la "''' + env.SSH_KEY + '''"
-echo "[DEBUG] Размер ключа: $(stat -c%s "''' + env.SSH_KEY + '''" 2>/dev/null || wc -c < "''' + env.SSH_KEY + '''") байт"
+# Устанавливаем права на ключ
+chmod 600 "''' + env.SSH_KEY + '''" 2>/dev/null || true
 
-# Устанавливаем правильные права на ключ
-echo "[DEBUG] Устанавливаем права 600 на ключ..."
-chmod 600 "''' + env.SSH_KEY + '''" 2>/dev/null || echo "[WARNING] Не удалось изменить права на ключ"
-
-# 1. ТЕСТИРУЕМ SSH ПОДКЛЮЧЕНИЕ (с увеличенными таймаутами и диагностикой)
+# 1. ТЕСТИРУЕМ SSH ПОДКЛЮЧЕНИЕ
 echo ""
-echo "[DEBUG] 1. ТЕСТИРУЕМ SSH ПОДКЛЮЧЕНИЕ К СЕРВЕРУ..."
-echo "[DEBUG] Увеличиваем таймауты для проблемных сетей..."
-echo "[DEBUG] Команда: ssh -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o BatchMode=yes "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' \"echo SSH_TEST_OK && hostname\""
+echo "[INFO] Тестируем SSH подключение к серверу..."
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o BatchMode=yes -o TCPKeepAlive=yes"
 
 if ssh -i "''' + env.SSH_KEY + '''" $SSH_OPTS \
     "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' \
-    "echo '[OK] SSH подключение успешно' && hostname && echo '[INFO] Проверка времени: ' && date"; then
+    "echo '[OK] SSH подключение успешно'"; then
     echo "[OK] SSH подключение работает"
 else
-    echo "[ERROR] Ошибка SSH подключения!"
-    echo "[DEBUG] === ПОДРОБНАЯ ДИАГНОСТИКА SSH ==="
-    echo "[DEBUG] 1. Проверяем доступность порта 22 через netcat..."
-    timeout 10 nc -zv ''' + params.SERVER_ADDRESS + ''' 22 2>&1 || echo "[DEBUG]   Netcat проверка не удалась"
-    
-    echo "[DEBUG] 2. Пробуем SSH с verbose режимом (уровень 3):"
-    ssh -i "''' + env.SSH_KEY + '''" -vvv -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
-        "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' "echo test" 2>&1 | tail -20 || echo "[DEBUG]   Verbose SSH завершился ошибкой"
-    
-    echo "[DEBUG] 3. Проверяем разные методы подключения:"
-    echo "[DEBUG]   - Через IP адрес (если известен):"
-    SERVER_IP=$(nslookup ''' + params.SERVER_ADDRESS + ''' 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
-    if [ -n "$SERVER_IP" ]; then
-        echo "[DEBUG]     IP сервера: $SERVER_IP"
-        timeout 5 bash -c "echo > /dev/tcp/$SERVER_IP/22" 2>/dev/null && echo "[DEBUG]     ✅ Порт 22 открыт по IP" || echo "[DEBUG]     ❌ Порт 22 закрыт по IP"
-    fi
-    
-    echo "[DEBUG] === ДИАГНОСТИКА ЗАВЕРШЕНА ==="
-    echo "[ERROR] Сервер ''' + params.SERVER_ADDRESS + ''' недоступен по SSH (порт 22)"
-    echo "[INFO] Рекомендации:"
-    echo "[INFO] 1. Проверьте что SSH демон запущен на сервере"
-    echo "[INFO] 2. Проверьте фаервол и правила безопасности"
-    echo "[INFO] 3. Проверьте сетевую доступность"
+    echo "[ERROR] SSH подключение к серверу ''' + params.SERVER_ADDRESS + ''' не удалось"
+    echo "[INFO] Проверьте доступность SSH сервиса и сетевое подключение"
     exit 1
 fi
 
 # 2. СОЗДАЕМ ДИРЕКТОРИЮ НА УДАЛЕННОМ СЕРВЕРЕ
 echo ""
-echo "[DEBUG] 2. СОЗДАЕМ /tmp/deploy-monitoring НА УДАЛЕННОМ СЕРВЕРЕ..."
-echo "[DEBUG] Команда: ssh -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' \"rm -rf /tmp/deploy-monitoring && mkdir -p /tmp/deploy-monitoring\""
+echo "[INFO] Создание рабочей директории..."
 
 if ssh -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no \
     "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' \
     "rm -rf /tmp/deploy-monitoring && mkdir -p /tmp/deploy-monitoring"; then
-    echo "[OK] Директория создана успешно"
+    echo "[OK] Директория создана"
 else
-    echo "[ERROR] Не удалось создать директорию на удаленном сервере"
+    echo "[ERROR] Не удалось создать директорию"
     exit 1
 fi
 
-# 3. КОПИРУЕМ ОСНОВНОЙ СКРИПТ
+# 3. КОПИРУЕМ ФАЙЛЫ
 echo ""
-echo "[DEBUG] 3. КОПИРУЕМ deploy_monitoring_script.sh НА СЕРВЕР..."
+echo "[INFO] Копирование файлов на сервер..."
 
-if scp -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no \
+if scp -q -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no \
     deploy_monitoring_script.sh \
     "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''':/tmp/deploy-monitoring/deploy_monitoring_script.sh; then
-    echo "[OK] Основной скрипт скопирован успешно"
+    echo "[OK] Скрипт скопирован"
 else
-    echo "[ERROR] Не удалось скопировать deploy_monitoring_script.sh"
+    echo "[ERROR] Не удалось скопировать скрипт"
     exit 1
 fi
 
-# 4. КОПИРУЕМ ПАПКУ WRAPPERS
-echo ""
-echo "[DEBUG] 4. КОПИРУЕМ ПАПКУ WRAPPERS НА СЕРВЕР..."
-
-if scp -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no -r \
+if scp -q -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no -r \
     wrappers \
     "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''':/tmp/deploy-monitoring/; then
-    echo "[OK] Папка wrappers скопирована успешно"
+    echo "[OK] Wrappers скопированы"
 else
-    echo "[ERROR] Не удалось скопировать папку wrappers"
+    echo "[ERROR] Не удалось скопировать wrappers"
     exit 1
 fi
 
-# 5. КОПИРУЕМ ФАЙЛ С УЧЕТНЫМИ ДАННЫМИ
-echo ""
-echo "[DEBUG] 5. КОПИРУЕМ temp_data_cred.json НА СЕРВЕР..."
-
-if scp -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no \
+if scp -q -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no \
     temp_data_cred.json \
     "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''':/tmp/; then
-    echo "[OK] Файл учетных данных скопирован успешно"
+    echo "[OK] Credentials скопированы"
 else
-    echo "[ERROR] Не удалось скопировать temp_data_cred.json"
+    echo "[ERROR] Не удалось скопировать credentials"
     exit 1
 fi
 
 echo ""
-echo "[SUCCESS] === ВСЕ ФАЙЛЫ УСПЕШНО СКОПИРОВАНЫ НА СЕРВЕР ==="
-echo "[INFO] Сервер: ''' + params.SERVER_ADDRESS + '''"
-echo "[INFO] Время: $(date)"
-echo "[INFO] Все операции выполнены успешно!"
+echo "[SUCCESS] Все файлы скопированы на сервер"
 '''
 
-                        // Создаем улучшенный verify_script.sh
+                        // Создаем verify_script.sh
                         writeFile file: 'verify_script.sh', text: '''#!/bin/bash
 set -e
 
-echo "[DEBUG] === НАЧАЛО VERIFY_SCRIPT.SH ==="
-echo "[DEBUG] Проверка скопированных файлов на сервере..."
+echo "[INFO] Проверка скопированных файлов..."
 
 ssh -i "''' + env.SSH_KEY + '''" -o StrictHostKeyChecking=no \
     "''' + env.SSH_USER + '''"@''' + params.SERVER_ADDRESS + ''' << 'REMOTE_EOF'
-echo "[VERIFY] === ПРОВЕРКА ФАЙЛОВ НА СЕРВЕРЕ ==="
-echo "[VERIFY] Время: $(date)"
-echo "[VERIFY] Хост: $(hostname)"
-echo ""
 
-echo "[VERIFY] Проверяем файлы в /tmp/deploy-monitoring/:"
-ls -la /tmp/deploy-monitoring/
-echo ""
+[ ! -f "/tmp/deploy-monitoring/deploy_monitoring_script.sh" ] && echo "[ERROR] Скрипт не найден!" && exit 1
+[ ! -d "/tmp/deploy-monitoring/wrappers" ] && echo "[ERROR] Wrappers не найдены!" && exit 1
+[ ! -f "/tmp/temp_data_cred.json" ] && echo "[ERROR] Credentials не найдены!" && exit 1
 
-echo "[VERIFY] Проверяем deploy_monitoring_script.sh:"
-if [ -f "/tmp/deploy-monitoring/deploy_monitoring_script.sh" ]; then
-    echo "[OK] deploy_monitoring_script.sh найден"
-    ls -la "/tmp/deploy-monitoring/deploy_monitoring_script.sh"
-    echo "[INFO] Размер: $(wc -c < "/tmp/deploy-monitoring/deploy_monitoring_script.sh") байт"
-else
-    echo "[ERROR] deploy_monitoring_script.sh не найден!"
-fi
-echo ""
-
-echo "[VERIFY] Проверяем папку wrappers:"
-if [ -d "/tmp/deploy-monitoring/wrappers" ]; then
-    echo "[OK] wrappers найдена"
-    ls -la "/tmp/deploy-monitoring/wrappers/"
-    echo "[INFO] Количество файлов: $(find "/tmp/deploy-monitoring/wrappers/" -type f | wc -l)"
-else
-    echo "[ERROR] wrappers не найдена!"
-fi
-echo ""
-
-echo "[VERIFY] Проверяем temp_data_cred.json:"
-if [ -f "/tmp/temp_data_cred.json" ]; then
-    echo "[OK] temp_data_cred.json найден"
-    ls -la "/tmp/temp_data_cred.json"
-    echo "[INFO] Размер: $(wc -c < "/tmp/temp_data_cred.json") байт"
-else
-    echo "[ERROR] temp_data_cred.json не найден!"
-fi
-echo ""
-
-echo "[VERIFY] === ПРОВЕРКА ЗАВЕРШЕНА ==="
+echo "[OK] Все файлы на месте"
 REMOTE_EOF
-
-echo "[DEBUG] === VERIFY_SCRIPT.SH ЗАВЕРШЕН ==="
 '''
-
-                        echo "[DEBUG] Созданные скрипты:"
-                        sh 'ls -la prep_clone.sh scp_script.sh verify_script.sh'
-                        
                         sh 'chmod +x prep_clone.sh scp_script.sh verify_script.sh'
                         
                         withEnv(['SSH_KEY=' + env.SSH_KEY, 'SSH_USER=' + env.SSH_USER]) {
-                            echo "[DEBUG] Запуск prep_clone.sh..."
                             sh './prep_clone.sh'
                             
-                            echo "[DEBUG] Запуск scp_script.sh (ОСНОВНАЯ ОПЕРАЦИЯ) с retry..."
-                            
-                            // Retry логика для временных проблем с сетью
+                            // Retry логика
                             def maxRetries = 3
-                            def retryDelay = 10 // секунд
+                            def retryDelay = 10
                             def lastError = null
                             
                             for (def attempt = 1; attempt <= maxRetries; attempt++) {
                                 try {
-                                    echo "[RETRY] Попытка $attempt из $maxRetries..."
+                                    if (attempt > 1) echo "[INFO] Попытка $attempt из $maxRetries..."
                                     sh './scp_script.sh'
-                                    echo "[SUCCESS] scp_script.sh выполнен успешно с попытки $attempt"
                                     lastError = null
                                     break
                                 } catch (Exception e) {
                                     lastError = e
-                                    echo "[RETRY] Попытка $attempt не удалась: ${e.message}"
-                                    
                                     if (attempt < maxRetries) {
-                                        echo "[RETRY] Ждем $retryDelay секунд перед следующей попыткой..."
+                                        echo "[WARNING] Попытка не удалась, повтор через $retryDelay сек..."
                                         sleep(time: retryDelay, unit: 'SECONDS')
-                                        echo "[RETRY] Продолжаем..."
                                     }
                                 }
                             }
                             
                             if (lastError) {
-                                echo "[ERROR] Все $maxRetries попытки scp_script.sh завершились ошибкой"
-                                echo "[ERROR] Последняя ошибка: ${lastError.message}"
-                                error("Ошибка при копировании файлов на сервер после $maxRetries попыток: ${lastError.message}")
+                                error("Ошибка копирования после $maxRetries попыток: ${lastError.message}")
                             }
                             
-                            echo "[DEBUG] Запуск verify_script.sh..."
                             sh './verify_script.sh'
                         }
                         
-                        echo "[DEBUG] Удаляем временные файлы..."
                         sh 'rm -f prep_clone.sh scp_script.sh verify_script.sh'
                     }
                     echo "[SUCCESS] Репозиторий успешно скопирован на сервер ${params.SERVER_ADDRESS}"

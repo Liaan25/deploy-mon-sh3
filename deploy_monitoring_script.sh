@@ -1156,6 +1156,18 @@ setup_monitoring_user_units() {
 
     # User-юнит Prometheus
     local prom_unit="${user_systemd_dir}/monitoring-prometheus.service"
+    
+    # Получаем параметры из /etc/prometheus/prometheus.env если он существует
+    local prom_opts=""
+    if [[ -f /etc/prometheus/prometheus.env ]]; then
+        prom_opts=$(grep '^PROMETHEUS_OPTS=' /etc/prometheus/prometheus.env 2>/dev/null | cut -d'"' -f2)
+    fi
+    
+    # Если параметры не найдены, используем значения по умолчанию
+    if [[ -z "$prom_opts" ]]; then
+        prom_opts="--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/data --web.console.templates=/etc/prometheus/consoles --web.console.libraries=/etc/prometheus/console_libraries --web.config.file=/etc/prometheus/web-config.yml --web.external-url=https://${SERVER_DOMAIN}:${PROMETHEUS_PORT}/ --web.listen-address=0.0.0.0:${PROMETHEUS_PORT}"
+    fi
+    
     cat > "$prom_unit" << EOF
 [Unit]
 Description=Monitoring Prometheus (user service)
@@ -1163,9 +1175,9 @@ After=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/prometheus/prometheus.env
-ExecStart=/usr/bin/prometheus \$PROMETHEUS_OPTS
+ExecStart=/usr/bin/prometheus ${prom_opts}
 Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=default.target
@@ -1669,6 +1681,10 @@ adjust_prometheus_permissions_for_mon_sys() {
 
     # Конфиги Prometheus
     print_info "Настройка владельца/прав конфигов Prometheus для ${mon_sys_user}"
+    
+    # Создаём необходимые директории если их нет
+    mkdir -p /etc/prometheus/consoles /etc/prometheus/console_libraries 2>/dev/null || true
+    
     if [[ -f "$prom_cfg" ]]; then
         chown "${mon_sys_user}:${mon_sys_user}" "$prom_cfg" 2>/dev/null || print_warning "Не удалось изменить владельца $prom_cfg"
         chmod 640 "$prom_cfg" 2>/dev/null || true
@@ -1681,14 +1697,23 @@ adjust_prometheus_permissions_for_mon_sys() {
         chown "${mon_sys_user}:${mon_sys_user}" "$prom_env" 2>/dev/null || print_warning "Не удалось изменить владельца $prom_env"
         chmod 640 "$prom_env" 2>/dev/null || true
     fi
+    
+    # Устанавливаем права на директории консолей
+    chown -R "${mon_sys_user}:${mon_sys_user}" /etc/prometheus/consoles /etc/prometheus/console_libraries 2>/dev/null || true
+    chmod 755 /etc/prometheus/consoles /etc/prometheus/console_libraries 2>/dev/null || true
 
     # Директория с данными Prometheus
+    if [[ ! -d "$prom_data_dir" ]]; then
+        print_info "Создание каталога данных Prometheus: $prom_data_dir"
+        mkdir -p "$prom_data_dir/data" 2>/dev/null || print_warning "Не удалось создать $prom_data_dir/data"
+    fi
+    
     if [[ -d "$prom_data_dir" ]]; then
         print_info "Настройка владельца/прав данных Prometheus для ${mon_sys_user}"
         chown -R "${mon_sys_user}:${mon_sys_user}" "$prom_data_dir" 2>/dev/null || print_warning "Не удалось изменить владельца $prom_data_dir"
         chmod 750 "$prom_data_dir" 2>/dev/null || true
     else
-        print_warning "Каталог данных Prometheus ($prom_data_dir) не найден"
+        print_warning "Каталог данных Prometheus ($prom_data_dir) всё ещё не найден после попытки создания"
     fi
 
     print_success "Права Prometheus адаптированы для запуска под ${mon_sys_user} (user-юнит)"

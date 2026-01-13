@@ -1,4 +1,4 @@
-﻿pipeline {
+pipeline {
     agent none
 
     parameters {
@@ -101,7 +101,7 @@
                             echo "[SSH_TEST] Пробуем подключиться к серверу..."
                             ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
                                 "${SSH_USER}@''' + params.SERVER_ADDRESS + '''" \
-                                "echo \'[OK] SSH подключение успешно\' && hostname" || {
+                                "echo '[OK] SSH подключение успешно' && hostname" || {
                                 echo "[ERROR] SSH подключение не удалось"
                                 echo "[INFO] Проверьте:"
                                 echo "[INFO] 1. Запущен ли SSH на сервере"

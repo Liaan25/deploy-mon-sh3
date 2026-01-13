@@ -18,6 +18,8 @@ pipeline {
         string(name: 'RLM_API_URL',        defaultValue: params.RLM_API_URL ?: '',        description: 'Базовый URL RLM API (например, https://api.rlm.sbrf.ru)')
         booleanParam(name: 'SKIP_VAULT_INSTALL', defaultValue: false, description: 'Пропустить установку Vault через RLM (использовать уже установленный vault-agent)')
         booleanParam(name: 'SKIP_RPM_INSTALL', defaultValue: false, description: '⚠️ Пропустить установку RPM пакетов (Grafana, Prometheus, Harvest) через RLM - использовать уже установленные пакеты')
+        booleanParam(name: 'SKIP_CI_CHECKS', defaultValue: true, description: '⚡ Пропустить CI диагностику (очистка, отладка, проверки сети) - только получение из Vault и развертывание')
+        booleanParam(name: 'SKIP_DEPLOYMENT', defaultValue: false, description: '🚫 Пропустить весь CDL этап (копирование и развертывание на сервер) - только CI проверки')
     }
 
     stages {
@@ -27,6 +29,9 @@ pipeline {
         
         stage('CI: Очистка workspace и отладка') {
             agent { label "clearAgent&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_CI_CHECKS != true }
+            }
             steps {
                 script {
                     // Вычисляем DATE_INSTALL здесь, где есть контекст агента
@@ -71,6 +76,9 @@ pipeline {
         
         stage('CI: Отладка параметров пайплайна') {
             agent { label "clearAgent&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_CI_CHECKS != true }
+            }
             steps {
                 script {
                     echo "================================================"
@@ -113,6 +121,9 @@ pipeline {
         
         stage('CI: Информация о коде и окружении') {
             agent { label "clearAgent&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_CI_CHECKS != true }
+            }
             steps {
                 script {
                     echo "[DEBUG] === ИНФОРМАЦИЯ О КОДЕ И ОКРУЖЕНИИ ==="
@@ -133,6 +144,9 @@ pipeline {
         
         stage('CI: Расширенная диагностика сети и сервера') {
             agent { label "clearAgent&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_CI_CHECKS != true }
+            }
             steps {
                 script {
                     echo "================================================"
@@ -192,6 +206,12 @@ pipeline {
             agent { label "clearAgent&&sbel8&&!static" }
             steps {
                 script {
+                    // Устанавливаем DATE_INSTALL если она ещё не установлена (когда CI этапы пропущены)
+                    if (!env.DATE_INSTALL) {
+                        env.DATE_INSTALL = sh(script: "date '+%Y%m%d_%H%M%S'", returnStdout: true).trim()
+                        echo "[DEBUG] DATE_INSTALL установлена: ${env.DATE_INSTALL}"
+                    }
+                    
                     echo "[STEP] Получение чувствительных данных из Vault"
                     echo "[DEBUG] SEC_MAN_ADDR: ${params.SEC_MAN_ADDR}"
                     echo "[DEBUG] NAMESPACE_CI: ${params.NAMESPACE_CI}"
@@ -332,6 +352,9 @@ pipeline {
 
         stage('CDL: Копирование скрипта на удаленный сервер') {
             agent { label "masterLin&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_DEPLOYMENT != true }
+            }
             steps {
                 script {
                     echo "================================================"
@@ -640,6 +663,9 @@ echo "[DEBUG] === VERIFY_SCRIPT.SH ЗАВЕРШЕН ==="
 
         stage('CDL: Выполнение развертывания') {
             agent { label "masterLin&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_DEPLOYMENT != true }
+            }
             steps {
                 script {
                     echo "[STEP] Запуск развертывания на удаленном сервере..."
@@ -730,6 +756,9 @@ REMOTE_EOF
 
         stage('CDL: Проверка результатов') {
             agent { label "masterLin&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_DEPLOYMENT != true }
+            }
             steps {
                 script {
                     echo "[STEP] Проверка результатов развертывания..."
@@ -767,6 +796,9 @@ ENDSSH
 
         stage('CDL: Очистка') {
             agent { label "masterLin&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_DEPLOYMENT != true }
+            }
             steps {
                 script {
                     echo "[STEP] Очистка временных файлов..."
@@ -790,6 +822,9 @@ ssh -i "$SSH_KEY" -q -o StrictHostKeyChecking=no \
 
         stage('CDL: Получение сведений о развертывании системы') {
             agent { label "masterLin&&sbel8&&!static" }
+            when {
+                expression { params.SKIP_DEPLOYMENT != true }
+            }
             steps {
                 script {
                     def domainName = ''

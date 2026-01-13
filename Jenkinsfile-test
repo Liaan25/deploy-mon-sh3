@@ -1,0 +1,12 @@
+// Простейший декларативный pipeline для тестирования
+pipeline {
+    agent any
+    
+    stages {
+        stage('Hello') {
+            steps {
+                echo 'Hello World'
+            }
+        }
+    }
+}

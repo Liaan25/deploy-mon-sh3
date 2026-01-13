@@ -1,0 +1,10 @@
+// Скриптовый pipeline (работает с более старыми версиями Jenkins)
+node {
+    stage('Hello') {
+        echo 'Hello World from Scripted Pipeline'
+    }
+    
+    stage('Check Parameters') {
+        echo "Checking if parameters work..."
+    }
+}

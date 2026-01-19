@@ -1315,10 +1315,10 @@ tls_server_config:
   cipher_suites:
     - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
     - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-  client_auth_type: "RequireAndVerifyClientCert"
-  client_ca_file: "/etc/prometheus/cert/ca_chain.crt"
-  client_allowed_sans:
-    - "${SERVER_DOMAIN}"
+  # ИСПРАВЛЕНО: NoClientCert - не требуем клиентские сертификаты
+  # Это позволяет Harvest, Prometheus targets и curl подключаться без mTLS
+  # Grafana может использовать сертификаты опционально для повышенной безопасности
+  client_auth_type: "NoClientCert"
 EOF
     # ИСПРАВЛЕНО: Создаем prometheus.env только для справки
     # User-systemd unit файл НЕ использует этот файл - параметры берутся напрямую из скрипта

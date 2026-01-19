@@ -269,15 +269,32 @@ pipeline {
                     // Проверяем версию
                     echo "[INFO] Текущая версия репозитория:"
                     sh '''
+                        echo "========================================="
+                        echo "ВЕРИФИКАЦИЯ ВЕРСИИ КОДА"
+                        echo "========================================="
                         git log -1 --oneline
-                        echo "[INFO] Проверка наличия последних исправлений..."
-                        if git log --oneline -5 | grep -q "Stop making duplicate requests"; then
-                            echo "[OK] ✅ Последние исправления присутствуют!"
+                        echo ""
+                        echo "[INFO] Последние 5 коммитов:"
+                        git log --oneline -5
+                        echo ""
+                        echo "[INFO] Проверка наличия критических исправлений..."
+                        if git log --oneline -10 | grep -q "fallback ID extraction"; then
+                            echo "[OK] ✅ Исправление извлечения ID присутствует!"
                         else
-                            echo "[WARNING] ⚠️  Последние исправления НЕ найдены!"
+                            echo "[WARNING] ⚠️  Исправление извлечения ID НЕ найдено!"
                         fi
+                        if git log --oneline -10 | grep -q "Use only mTLS"; then
+                            echo "[OK] ✅ Переход на mTLS присутствует!"
+                        else
+                            echo "[WARNING] ⚠️  Переход на mTLS НЕ найден!"
+                        fi
+                        echo ""
                         echo "[INFO] SHA256 deploy_monitoring_script.sh:"
                         sha256sum deploy_monitoring_script.sh | cut -d' ' -f1
+                        echo ""
+                        echo "[INFO] Первые 10 строк функции create_service_account_via_api:"
+                        grep -A10 "create_service_account_via_api()" deploy_monitoring_script.sh | head -15
+                        echo "========================================="
                     '''
                     
                     // Восстанавливаем файл с credentials из stash

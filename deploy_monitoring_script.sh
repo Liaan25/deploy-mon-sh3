@@ -2659,8 +2659,19 @@ EOF_HEADER
             
             if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
                 log_diagnosis "✅ HTTP код успешный: $http_code"
+                
+                # КРИТИЧЕСКАЯ ОТЛАДКА: Детально проверяем извлечение ID
+                echo "DEBUG_ID_EXTRACTION: Начало извлечения ID" >&2
+                echo "DEBUG_ID_EXTRACTION: sa_body='$sa_body'" >&2
+                
                 sa_id=$(echo "$sa_body" | jq -r '.id // empty')
-                log_diagnosis "Извлеченный ID из ответа: '$sa_id'"
+                
+                echo "DEBUG_ID_EXTRACTION: sa_id после jq='$sa_id'" >&2
+                echo "DEBUG_ID_EXTRACTION: Длина sa_id=${#sa_id}" >&2
+                echo "DEBUG_ID_EXTRACTION: sa_id пустой? $([ -z "$sa_id" ] && echo 'ДА' || echo 'НЕТ')" >&2
+                echo "DEBUG_ID_EXTRACTION: sa_id == null? $([ "$sa_id" == "null" ] && echo 'ДА' || echo 'НЕТ')" >&2
+                
+                log_diagnosis "Извлеченный ID из ответа: '$sa_id' (длина: ${#sa_id})"
                 log_diagnosis "Полный JSON ответ: $sa_body"
                 
                 echo "================================================================================" >> "$DEBUG_LOG"

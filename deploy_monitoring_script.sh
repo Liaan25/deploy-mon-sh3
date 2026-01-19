@@ -2648,9 +2648,28 @@ EOF_HEADER
             fi
             
             # Парсим результат
-            http_code=$(echo "$attempt_result" | awk -F'|||' '{print $1}')
-            sa_body=$(echo "$attempt_result" | awk -F'|||' '{print $2}')
-            sa_response=$(echo "$attempt_result" | awk -F'|||' '{print $3}')
+            # ВАЖНО: Используем bash string manipulation вместо awk/cut для надежности
+            # attempt_result формат: "code|||body|||response"
+            echo "DEBUG_PARSE_START: Начало парсинга attempt_result" >&2
+            echo "DEBUG_PARSE_INPUT: attempt_result='$attempt_result'" >&2
+            echo "DEBUG_PARSE_INPUT_LENGTH: ${#attempt_result} символов" >&2
+            
+            IFS='|||' read -r http_code sa_body sa_response <<< "$attempt_result"
+            
+            echo "DEBUG_PARSE_RESULT: http_code='$http_code'" >&2
+            echo "DEBUG_PARSE_RESULT: sa_body='${sa_body:0:100}...'" >&2
+            echo "DEBUG_PARSE_RESULT: sa_response length=${#sa_response}" >&2
+            
+            # Дополнительная проверка: если парсинг не сработал, пробуем альтернативный метод
+            if [[ -z "$http_code" || "$http_code" == *"|||"* ]]; then
+                echo "DEBUG_PARSE_ERROR: IFS read не сработал, пробуем cut" >&2
+                echo "DEBUG_PARSE_ERROR: attempt_result='$attempt_result'" >&2
+                http_code=$(echo "$attempt_result" | cut -d'|' -f1)
+                sa_body=$(echo "$attempt_result" | cut -d'|' -f4)
+                sa_response=$(echo "$attempt_result" | cut -d'|' -f7-)
+                echo "DEBUG_PARSE_FALLBACK: http_code='$http_code'" >&2
+                echo "DEBUG_PARSE_FALLBACK: sa_body='${sa_body:0:100}...'" >&2
+            fi
             
             print_info "Результат запроса: HTTP $http_code"
             log_diagnosis "Получен HTTP код: $http_code"

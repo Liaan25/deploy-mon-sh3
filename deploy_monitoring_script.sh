@@ -3047,14 +3047,22 @@ EOF_HEADER
             local sa_id="$1"
             local token_payload token_response token_code token_body bearer_token
             
-            token_payload=$(jq -n --arg name "$token_name" '{name:$name}')
+            # ИСПРАВЛЕНО: Используем jq -c и tr для compact JSON без trailing newline
+            # Сохраняем в файл для избежания проблем с экранированием
+            token_payload=$(jq -c -n --arg name "$token_name" '{name:$name}' | tr -d '\n')
             
-            # Вариант 3: Сначала пробуем без сертификатов, потом с ними
+            local token_payload_file="/tmp/grafana_token_payload_$$.json"
+            printf '%s' "$token_payload" > "$token_payload_file"
+            
+            echo "DEBUG_TOKEN_PAYLOAD: $token_payload" >&2
+            echo "DEBUG_TOKEN_PAYLOAD_FILE: $token_payload_file (размер: $(stat -c%s "$token_payload_file" 2>/dev/null || echo "?") байт)" >&2
+            
+            # ИСПРАВЛЕНО: Используем --data-binary '@file' вместо -d "$variable"
             local curl_cmd_without_cert="curl -k -s -w \"\n%{http_code}\" \
                 -X POST \
                 -H \"Content-Type: application/json\" \
                 -u \"${grafana_user}:${grafana_password}\" \
-                -d \"$token_payload\" \
+                --data-binary \"@${token_payload_file}\" \
                 \"${grafana_url}/api/serviceaccounts/${sa_id}/tokens\""
             
             local curl_cmd_with_cert=""
@@ -3065,7 +3073,7 @@ EOF_HEADER
                     -X POST \
                     -H \"Content-Type: application/json\" \
                     -u \"${grafana_user}:${grafana_password}\" \
-                    -d \"$token_payload\" \
+                    --data-binary \"@${token_payload_file}\" \
                     \"${grafana_url}/api/serviceaccounts/${sa_id}/tokens\""
             fi
             
@@ -3075,72 +3083,84 @@ EOF_HEADER
                 local use_cert="$2"
                 
                 print_info "Выполнение API запроса для создания токена сервисного аккаунта..."
-                local response=$(eval "$cmd" 2>&1)
+                echo "DEBUG_TOKEN_CURL_CMD: ${cmd//${grafana_password}/*****}" >&2
+                
+                local response
+                if ! response=$(eval "$cmd" 2>&1); then
+                    print_error "Ошибка выполнения curl команды для токена"
+                    echo "ERROR|||{\"error\":\"curl failed\"}|||curl execution failed"
+                    return 1
+                fi
+                
                 local code=$(echo "$response" | tail -1)
                 local body=$(echo "$response" | head -n -1)
+                
+                echo "DEBUG_TOKEN_RESPONSE: HTTP $code" >&2
+                echo "DEBUG_TOKEN_BODY: $body" >&2
                 
                 # Логируем ответ для диагностики
                 print_info "Ответ API создания токена: HTTP $code"
                 
-                echo "$code:$body:$response"
+                # ИСПРАВЛЕНО: Используем ||| как разделитель (как в create_service_account_via_api)
+                echo "${code}|||${body}|||${response}"
                 return 0
             }
             
-            # Сначала пробуем без сертификатов
-            print_info "=== ПОПЫТКА 1: Создание токена без клиентских сертификатов ==="
-            local attempt1_result
-            attempt1_result=$(execute_token_request "$curl_cmd_without_cert" "false")
+            # ИЗМЕНЕНО: Используем только mTLS (как в create_service_account_via_api)
+            print_info "=== Создание токена с клиентскими сертификатами (mTLS) ==="
+            if [[ -z "$curl_cmd_with_cert" ]]; then
+                print_error "Клиентские сертификаты не найдены, не можем создать токен"
+                return 2
+            fi
             
-            token_code=$(echo "$attempt1_result" | awk -F'|||' '{print $1}')
-            token_body=$(echo "$attempt1_result" | awk -F'|||' '{print $2}')
-            token_response=$(echo "$attempt1_result" | awk -F'|||' '{print $3}')
+            local attempt_result
+            attempt_result=$(execute_token_request "$curl_cmd_with_cert" "true")
             
-            # Проверяем результат первой попытки
+            # ИСПРАВЛЕНО: Используем bash parameter expansion вместо awk
+            token_code="${attempt_result%%|||*}"
+            local temp="${attempt_result#*|||}"
+            token_body="${temp%%|||*}"
+            token_response="${temp#*|||}"
+            
+            echo "DEBUG_TOKEN_PARSE: token_code='$token_code'" >&2
+            echo "DEBUG_TOKEN_PARSE: token_body='${token_body:0:100}...'" >&2
+            
+            # Проверяем результат
             if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
-                print_success "Создание токена без сертификатов успешно (HTTP $token_code)"
+                print_success "Токен создан успешно (HTTP $token_code)"
+                
+                # Извлекаем токен из ответа
                 bearer_token=$(echo "$token_body" | jq -r '.key // empty')
+                
+                echo "DEBUG_TOKEN_EXTRACTION: bearer_token='${bearer_token:0:20}...'" >&2
+                echo "DEBUG_TOKEN_EXTRACTION: длина=${#bearer_token}" >&2
+                
                 if [[ -n "$bearer_token" && "$bearer_token" != "null" ]]; then
                     GRAFANA_BEARER_TOKEN="$bearer_token"
                     export GRAFANA_BEARER_TOKEN
-                    print_success "Токен создан через API"
+                    print_success "✅ Bearer токен получен и экспортирован"
+                    
+                    # Очищаем временный файл
+                    rm -f "$token_payload_file" 2>/dev/null || true
+                    
                     return 0
                 else
-                    print_warning "Токен создан, но значение пустое"
+                    print_warning "Токен создан, но значение пустое или null"
+                    print_warning "token_body: $token_body"
+                    
+                    # Очищаем временный файл
+                    rm -f "$token_payload_file" 2>/dev/null || true
+                    
                     return 2  # Специальный код для "частичного успеха"
                 fi
             else
-                print_warning "Создание токена без сертификатов не удалось (HTTP $token_code)"
+                print_warning "Создание токена через API не удалось (HTTP $token_code)"
+                print_warning "Response body: $token_body"
                 
-                # Если есть команда с сертификатами, пробуем с ними
-                if [[ -n "$curl_cmd_with_cert" ]]; then
-                    print_info "=== ПОПЫТКА 2: Создание токена с клиентскими сертификатами ==="
-                    local attempt2_result
-                    attempt2_result=$(execute_token_request "$curl_cmd_with_cert" "true")
-                    
-                    token_code=$(echo "$attempt2_result" | awk -F'|||' '{print $1}')
-                    token_body=$(echo "$attempt2_result" | awk -F'|||' '{print $2}')
-                    token_response=$(echo "$attempt2_result" | awk -F'|||' '{print $3}')
-                    
-                    if [[ "$token_code" == "200" || "$token_code" == "201" ]]; then
-                        print_success "Создание токена с сертификатами успешно (HTTP $token_code)"
-                        bearer_token=$(echo "$token_body" | jq -r '.key // empty')
-                        if [[ -n "$bearer_token" && "$bearer_token" != "null" ]]; then
-                            GRAFANA_BEARER_TOKEN="$bearer_token"
-                            export GRAFANA_BEARER_TOKEN
-                            print_success "Токен создан через API (с сертификатами)"
-                            return 0
-                        else
-                            print_warning "Токен создан, но значение пустое"
-                            return 2  # Специальный код для "частичного успеха"
-                        fi
-                    else
-                        print_warning "Создание токена через API не удалось (HTTP $token_code)"
-                        return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
-                    fi
-                else
-                    print_warning "Создание токена через API не удалось (HTTP $token_code)"
-                    return 2  # Возвращаем 2 вместо 1, чтобы продолжить с fallback
-                fi
+                # Очищаем временный файл
+                rm -f "$token_payload_file" 2>/dev/null || true
+                
+                return 2
             fi
         }
         

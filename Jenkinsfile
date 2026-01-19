@@ -254,17 +254,17 @@ pipeline {
                     
                     // КРИТИЧЕСКИ ВАЖНО: Принудительно обновляем репозиторий
                     echo "[INFO] Обновление кода из Git (принудительно)..."
-                    sh '''
-                        echo "[INFO] Текущий workspace: $(pwd)"
-                        echo "[INFO] Git статус ПЕРЕД обновлением:"
-                        git status || echo "[WARNING] Git статус недоступен"
-                        echo "[INFO] Принудительное обновление из remote..."
-                        git fetch origin
-                        git reset --hard origin/master
-                        echo "[INFO] Git статус ПОСЛЕ обновления:"
-                        git log -1 --oneline
-                    '''
-                    checkout scm
+                    
+                    // Используем checkout с опциями для принудительной очистки
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: scm.branches,
+                        extensions: [
+                            [$class: 'CleanBeforeCheckout'],
+                            [$class: 'CleanCheckout']
+                        ],
+                        userRemoteConfigs: scm.userRemoteConfigs
+                    ])
                     
                     // Проверяем версию
                     echo "[INFO] Текущая версия репозитория:"

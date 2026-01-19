@@ -2623,9 +2623,15 @@ EOF_HEADER
             sa_response=$(echo "$attempt1_result" | awk -F'|||' '{print $3}')
             
             # Проверяем результат первой попытки
-            if [[ "$http_code" == "200" || "$http_code" == "201" || "$http_code" == "409" ]]; then
+            if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
                 print_success "Запрос без сертификатов успешен (HTTP $http_code)"
                 log_diagnosis "✅ Запрос без сертификатов успешен"
+                # КРИТИЧЕСКИ ВАЖНО: Первый запрос успешен, сразу переходим к обработке результата!
+                # Пропускаем все fallback-попытки (localhost, сертификаты)
+            elif [[ "$http_code" == "409" || ("$http_code" == "400" && "$sa_body" == *"ErrAlreadyExists"*) ]]; then
+                print_warning "Сервисный аккаунт уже существует (HTTP $http_code)"
+                log_diagnosis "✅ Сервисный аккаунт уже существует - это ОК"
+                # Пропускаем fallback-попытки, переходим к получению существующего ID
             else
                 print_warning "Запрос без сертификатов не удался (HTTP $http_code)"
                 log_diagnosis "⚠️  Запрос без сертификатов не удался"

@@ -2671,6 +2671,13 @@ EOF_HEADER
                 echo "DEBUG_ID_EXTRACTION: sa_id пустой? $([ -z "$sa_id" ] && echo 'ДА' || echo 'НЕТ')" >&2
                 echo "DEBUG_ID_EXTRACTION: sa_id == null? $([ "$sa_id" == "null" ] && echo 'ДА' || echo 'НЕТ')" >&2
                 
+                # FALLBACK: Если jq не сработал, пробуем извлечь ID через grep/sed
+                if [[ -z "$sa_id" || "$sa_id" == "null" ]]; then
+                    echo "DEBUG_ID_EXTRACTION: jq не извлек ID, пробуем альтернативный метод (grep/sed)" >&2
+                    sa_id=$(echo "$sa_body" | grep -o '"id":[0-9]*' | head -1 | sed 's/"id"://')
+                    echo "DEBUG_ID_EXTRACTION: sa_id после grep/sed='$sa_id'" >&2
+                fi
+                
                 log_diagnosis "Извлеченный ID из ответа: '$sa_id' (длина: ${#sa_id})"
                 log_diagnosis "Полный JSON ответ: $sa_body"
                 

@@ -1157,19 +1157,19 @@ setup_monitoring_user_units() {
     # User-юнит Prometheus
     local prom_unit="${user_systemd_dir}/monitoring-prometheus.service"
     
-    # Получаем параметры из /etc/prometheus/prometheus.env если он существует
-    local prom_opts=""
-    if [[ -f /etc/prometheus/prometheus.env ]]; then
-        # Читаем файл и извлекаем значение переменной PROMETHEUS_OPTS
-        # Формат файла: PROMETHEUS_OPTS="параметры"
-        source /etc/prometheus/prometheus.env 2>/dev/null || true
-        prom_opts="${PROMETHEUS_OPTS:-}"
+    # ИСПРАВЛЕНО: Всегда используем актуальные параметры
+    # НЕ читаем старый prometheus.env, чтобы избежать использования устаревших параметров
+    local prom_opts="--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/data --web.console.templates=/etc/prometheus/consoles --web.console.libraries=/etc/prometheus/console_libraries --web.config.file=/etc/prometheus/web-config.yml --web.external-url=https://${SERVER_DOMAIN}:${PROMETHEUS_PORT}/ --web.listen-address=0.0.0.0:${PROMETHEUS_PORT}"
+    
+    print_info "Prometheus параметры запуска: ${prom_opts:0:100}..."
+    
+    # ИСПРАВЛЕНО: Удаляем старый unit файл, чтобы гарантировать создание нового
+    if [[ -f "$prom_unit" ]]; then
+        print_info "Удаление старого unit файла для пересоздания"
+        rm -f "$prom_unit" 2>/dev/null || true
     fi
     
-    # Если параметры не найдены, используем значения по умолчанию
-    if [[ -z "$prom_opts" ]]; then
-        prom_opts="--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/data --web.console.templates=/etc/prometheus/consoles --web.console.libraries=/etc/prometheus/console_libraries --web.config.file=/etc/prometheus/web-config.yml --web.external-url=https://${SERVER_DOMAIN}:${PROMETHEUS_PORT}/ --web.listen-address=0.0.0.0:${PROMETHEUS_PORT}"
-    fi
+    print_info "Создание нового systemd unit файла: $prom_unit"
     
     cat > "$prom_unit" << EOF
 [Unit]
@@ -1320,7 +1320,12 @@ tls_server_config:
   client_allowed_sans:
     - "${SERVER_DOMAIN}"
 EOF
+    # ИСПРАВЛЕНО: Создаем prometheus.env только для справки
+    # User-systemd unit файл НЕ использует этот файл - параметры берутся напрямую из скрипта
     "$WRAPPERS_DIR/config_writer_launcher.sh" /etc/prometheus/prometheus.env << EOF
+# ВНИМАНИЕ: Этот файл создается только для справки
+# Systemd unit файл monitoring-prometheus.service НЕ читает его
+# Все параметры запуска задаются напрямую в ExecStart
 PROMETHEUS_OPTS="--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/data --web.console.templates=/etc/prometheus/consoles --web.console.libraries=/etc/prometheus/console_libraries --web.config.file=/etc/prometheus/web-config.yml --web.external-url=https://${SERVER_DOMAIN}:${PROMETHEUS_PORT}/ --web.listen-address=0.0.0.0:${PROMETHEUS_PORT}"
 EOF
     chown prometheus:prometheus /etc/prometheus/web-config.yml /etc/prometheus/prometheus.env

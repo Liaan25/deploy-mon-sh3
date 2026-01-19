@@ -1,4 +1,4 @@
-﻿pipeline {
+pipeline {
     agent none  // Не выбираем агент глобально - используем разные агенты для CI и CDL
 
     parameters {

@@ -252,6 +252,24 @@ pipeline {
                     echo "================================================"
                     echo "[INFO] Сервер: ${params.SERVER_ADDRESS}"
                     
+                    // КРИТИЧЕСКИ ВАЖНО: Принудительно обновляем репозиторий
+                    echo "[INFO] Обновление кода из Git (принудительно)..."
+                    checkout scm
+                    
+                    // Проверяем версию
+                    echo "[INFO] Текущая версия репозитория:"
+                    sh '''
+                        git log -1 --oneline
+                        echo "[INFO] Проверка наличия последних исправлений..."
+                        if git log --oneline -5 | grep -q "Stop making duplicate requests"; then
+                            echo "[OK] ✅ Последние исправления присутствуют!"
+                        else
+                            echo "[WARNING] ⚠️  Последние исправления НЕ найдены!"
+                        fi
+                        echo "[INFO] SHA256 deploy_monitoring_script.sh:"
+                        sha256sum deploy_monitoring_script.sh | cut -d' ' -f1
+                    '''
+                    
                     // Восстанавливаем файл с credentials из stash
                     unstash 'vault-credentials'
                     

@@ -2718,6 +2718,43 @@ EOF_HEADER
                 if [[ -n "$sa_id" && "$sa_id" != "null" ]]; then
                     print_success "Сервисный аккаунт создан через API, ID: $sa_id"
                     log_diagnosis "✅ Сервисный аккаунт создан, ID: $sa_id"
+                    
+                    # ВАЖНО: Обновляем роль с Viewer на Admin для возможности создания datasources
+                    print_info "Обновление роли Service Account на Admin..."
+                    echo "DEBUG_SA_UPDATE_ROLE: Обновляем роль SA ID=$sa_id на Admin" >&2
+                    
+                    local role_update_payload
+                    role_update_payload=$(printf '{"role":"Admin"}')
+                    local role_update_file="/tmp/grafana_sa_role_update_$$.json"
+                    printf '%s' "$role_update_payload" > "$role_update_file"
+                    
+                    local role_update_cmd="curl -k -s -w \"\n%{http_code}\" \
+                        --cert \"/opt/vault/certs/grafana-client.crt\" \
+                        --key \"/opt/vault/certs/grafana-client.key\" \
+                        -X PATCH \
+                        -H \"Content-Type: application/json\" \
+                        -u \"${grafana_user}:${grafana_password}\" \
+                        --data-binary \"@${role_update_file}\" \
+                        \"${grafana_url}/api/serviceaccounts/${sa_id}\""
+                    
+                    local role_response role_code role_body
+                    role_response=$(eval "$role_update_cmd" 2>&1)
+                    role_code=$(echo "$role_response" | tail -1)
+                    role_body=$(echo "$role_response" | head -n -1)
+                    
+                    rm -f "$role_update_file" 2>/dev/null || true
+                    
+                    echo "DEBUG_SA_UPDATE_ROLE_RESPONSE: HTTP $role_code" >&2
+                    echo "DEBUG_SA_UPDATE_ROLE_BODY: $role_body" >&2
+                    
+                    if [[ "$role_code" == "200" || "$role_code" == "201" ]]; then
+                        print_success "✅ Роль Service Account обновлена на Admin"
+                        log_diagnosis "✅ Роль обновлена на Admin"
+                    else
+                        print_warning "⚠️  Не удалось обновить роль (HTTP $role_code), но продолжаем"
+                        log_diagnosis "⚠️  Обновление роли не удалось (HTTP $role_code): $role_body"
+                    fi
+                    
                     log_diagnosis "=== УСПЕШНОЕ СОЗДАНИЕ СЕРВИСНОГО АККАУНТА ==="
                     print_info "📋 DEBUG LOG: $DEBUG_LOG"
                     echo "$sa_id"

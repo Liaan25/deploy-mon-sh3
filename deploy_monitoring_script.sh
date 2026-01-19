@@ -3270,9 +3270,9 @@ EOF_HEADER
     tls_client_key=$(cat /opt/vault/certs/grafana-client.key 2>/dev/null | jq -R -s . || echo '""')
     tls_ca_cert=$(cat /etc/prometheus/cert/ca_chain.crt 2>/dev/null | jq -R -s . || echo '""')
     
-    # Создаем payload для datasource
+    # ИСПРАВЛЕНО: Создаем payload для datasource (compact JSON)
     local ds_payload
-    ds_payload=$(jq -n \
+    ds_payload=$(jq -c -n \
         --arg url "https://${SERVER_DOMAIN}:${PROMETHEUS_PORT}" \
         --arg sn "${SERVER_DOMAIN}" \
         --argjson tlsClientCert "$tls_client_cert" \
@@ -3296,7 +3296,14 @@ EOF_HEADER
                 tlsClientKey: $tlsClientKey,
                 tlsCACert: $tlsCACert
             }
-        }')
+        }' | tr -d '\n')
+    
+    # Сохраняем payload в файл (избегаем проблем с экранированием в bash)
+    local ds_payload_file="/tmp/grafana_datasource_payload_$$.json"
+    printf '%s' "$ds_payload" > "$ds_payload_file"
+    
+    echo "DEBUG_DS_PAYLOAD_FILE: $ds_payload_file (размер: $(stat -c%s "$ds_payload_file" 2>/dev/null || echo "?") байт)" >&2
+    echo "DEBUG_DS_PAYLOAD_PREVIEW: ${ds_payload:0:150}..." >&2
     
     # Функция для настройки datasource через API
     configure_datasource_via_api() {
@@ -3326,11 +3333,12 @@ EOF_HEADER
             ds_id=$(echo "$ds_body" | jq -r '.id')
             print_info "Datasource существует, ID: $ds_id, обновляем..."
             
+            # ИСПРАВЛЕНО: Используем --data-binary '@file' вместо -d "$variable"
             local update_cmd="curl -k -s -w \"\n%{http_code}\" \
                 -X PUT \
                 -H \"Content-Type: application/json\" \
                 -H \"Authorization: Bearer $bearer_token\" \
-                -d \"$ds_payload\" \
+                --data-binary \"@${ds_payload_file}\" \
                 \"${grafana_url}/api/datasources/${ds_id}\""
             
             if [[ -f "/opt/vault/certs/grafana-client.crt" && -f "/opt/vault/certs/grafana-client.key" ]]; then
@@ -3340,30 +3348,40 @@ EOF_HEADER
                     -X PUT \
                     -H \"Content-Type: application/json\" \
                     -H \"Authorization: Bearer $bearer_token\" \
-                    -d \"$ds_payload\" \
+                    --data-binary \"@${ds_payload_file}\" \
                     \"${grafana_url}/api/datasources/${ds_id}\""
             fi
             
-            local update_response update_code
-            update_response=$(eval "$update_cmd")
+            echo "DEBUG_DS_UPDATE_CMD: ${update_cmd//$bearer_token/*****}" >&2
+            
+            local update_response update_code update_body
+            update_response=$(eval "$update_cmd" 2>&1)
             update_code=$(echo "$update_response" | tail -1)
+            update_body=$(echo "$update_response" | head -n -1)
+            
+            echo "DEBUG_DS_UPDATE_RESPONSE: HTTP $update_code" >&2
+            echo "DEBUG_DS_UPDATE_BODY: ${update_body:0:200}..." >&2
             
             if [[ "$update_code" == "200" || "$update_code" == "202" ]]; then
-                print_success "Datasource обновлен через API"
+                print_success "Datasource обновлен через API (HTTP $update_code)"
+                rm -f "$ds_payload_file" 2>/dev/null || true
                 return 0
             else
                 print_warning "Не удалось обновить datasource через API: HTTP $update_code"
+                print_warning "Response body: ${update_body:0:300}"
+                rm -f "$ds_payload_file" 2>/dev/null || true
                 return 1
             fi
         else
             # Datasource не существует, создаем
             print_info "Создание нового datasource через API..."
             
+            # ИСПРАВЛЕНО: Используем --data-binary '@file' вместо -d "$variable"
             local create_cmd="curl -k -s -w \"\n%{http_code}\" \
                 -X POST \
                 -H \"Content-Type: application/json\" \
                 -H \"Authorization: Bearer $bearer_token\" \
-                -d \"$ds_payload\" \
+                --data-binary \"@${ds_payload_file}\" \
                 \"${grafana_url}/api/datasources\""
             
             if [[ -f "/opt/vault/certs/grafana-client.crt" && -f "/opt/vault/certs/grafana-client.key" ]]; then
@@ -3373,19 +3391,28 @@ EOF_HEADER
                     -X POST \
                     -H \"Content-Type: application/json\" \
                     -H \"Authorization: Bearer $bearer_token\" \
-                    -d \"$ds_payload\" \
+                    --data-binary \"@${ds_payload_file}\" \
                     \"${grafana_url}/api/datasources\""
             fi
             
-            local create_response create_code
-            create_response=$(eval "$create_cmd")
-            create_code=$(echo "$create_response" | tail -1)
+            echo "DEBUG_DS_CREATE_CMD: ${create_cmd//$bearer_token/*****}" >&2
             
-            if [[ "$create_code" == "200" || "$create_code" == "202" ]]; then
-                print_success "Datasource создан через API"
+            local create_response create_code create_body
+            create_response=$(eval "$create_cmd" 2>&1)
+            create_code=$(echo "$create_response" | tail -1)
+            create_body=$(echo "$create_response" | head -n -1)
+            
+            echo "DEBUG_DS_CREATE_RESPONSE: HTTP $create_code" >&2
+            echo "DEBUG_DS_CREATE_BODY: ${create_body:0:200}..." >&2
+            
+            if [[ "$create_code" == "200" || "$create_code" == "201" || "$create_code" == "202" ]]; then
+                print_success "Datasource создан через API (HTTP $create_code)"
+                rm -f "$ds_payload_file" 2>/dev/null || true
                 return 0
             else
                 print_warning "Не удалось создать datasource через API: HTTP $create_code"
+                print_warning "Response body: ${create_body:0:300}"
+                rm -f "$ds_payload_file" 2>/dev/null || true
                 return 1
             fi
         fi

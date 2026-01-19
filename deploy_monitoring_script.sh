@@ -2195,6 +2195,18 @@ setup_grafana_datasource_and_dashboards() {
             # УПРОЩЕННАЯ ВЕРСИЯ - используем grafana_wrapper.sh (требование ИБ)
             # Правила ИБ: НЕ вызывать curl напрямую, только через обёртки!
             # ============================================================================
+            
+            # КРИТИЧЕСКИ ВАЖНО: Определяем DEBUG_LOG в начале функции!
+            local DEBUG_LOG="/tmp/debug_grafana_key.log"
+            
+            # Создаем заголовок debug лога
+            cat > "$DEBUG_LOG" << 'EOF_HEADER'
+================================================================================
+DEBUG LOG: Создание Service Account в Grafana
+Дата и время: $(date '+%Y-%m-%d %H:%M:%S %Z')
+================================================================================
+EOF_HEADER
+            
             print_info "=== Создание Service Account через wrapper ===" 
             log_diagnosis "=== ВХОД В create_service_account_via_api (через wrapper) ==="
             

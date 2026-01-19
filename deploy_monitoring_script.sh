@@ -217,14 +217,14 @@ install_vault_via_rlm() {
 print_step() {
     local t
     t=$(format_elapsed_minutes)
-    echo "[STEP][$t] $1"
+    echo "[STEP][$t] $1" >&2
     log_message "[STEP][$t] $1"
 }
 
 print_success() {
     local t
     t=$(format_elapsed_minutes)
-    echo "[SUCCESS][$t] $1"
+    echo "[SUCCESS][$t] $1" >&2
     log_message "[SUCCESS][$t] $1"
 }
 
@@ -238,14 +238,14 @@ print_error() {
 print_warning() {
     local t
     t=$(format_elapsed_minutes)
-    echo "[WARNING][$t] $1"
+    echo "[WARNING][$t] $1" >&2
     log_message "[WARNING][$t] $1"
 }
 
 print_info() {
     local t
     t=$(format_elapsed_minutes)
-    echo "[INFO][$t] $1"
+    echo "[INFO][$t] $1" >&2
     log_message "[INFO][$t] $1"
 }
 
